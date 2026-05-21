@@ -59,6 +59,9 @@ ALERTS_LOG_FILE    = "outputs/alerts_log.csv"
 
 CONFUSION_MATRIX_IMG    = "outputs/confusion_matrix.png"
 FEATURE_IMPORTANCE_IMG  = "outputs/feature_importance.png"
+FORECAST_FILE           = "outputs/forecast_24h.csv"
+FORECAST_ALERTS_FILE    = "outputs/forecast_alerts.csv"
+FORECAST_PLOT_IMG       = "outputs/forecast_plot.png"
 
 # Real coordinates for the 5 monitored cities
 CITY_COORDS = {
@@ -154,6 +157,44 @@ def load_data():
     )
 
 
+@st.cache_data
+def load_forecast():
+    """
+    Load the city-specific Prophet 24-hour PM2.5 forecast CSV.
+
+    Returns:
+        DataFrame with columns: city, timestamp, pm25_predicted, pm25_lower,
+        pm25_upper, alert_level — or None if the file does not exist or uses
+        the old single-city schema (no 'city' column).
+    """
+    if not os.path.exists(FORECAST_FILE):
+        return None
+    df = pd.read_csv(FORECAST_FILE)
+    if "city" not in df.columns:
+        # Old single-city schema — not compatible with city-specific dashboard.
+        # User must re-run python src/model.py to get the updated output.
+        return None
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    return df
+
+
+@st.cache_data
+def load_forecast_alerts():
+    """
+    Load the forward-looking forecast alert records.
+
+    Returns:
+        DataFrame with columns: alert_type, city, forecast_timestamp,
+        hours_ahead, pm25_predicted, pm25_upper, aqi_level, alert_level,
+        affected_groups, protective_actions, alert_text_en, alert_text_ur
+        — or None if the file does not exist or is empty.
+    """
+    if not os.path.exists(FORECAST_ALERTS_FILE):
+        return None
+    df = pd.read_csv(FORECAST_ALERTS_FILE)
+    return df if len(df) > 0 else None
+
+
 def add_season_bands(fig, df):
     """
     Add coloured vertical background bands to a Plotly figure for each season.
@@ -201,6 +242,8 @@ def add_season_bands(fig, df):
 # ============================================================================
 
 cleaned_df, anomalies_df, classified_df, alerts_df = load_data()
+forecast_df        = load_forecast()
+forecast_alerts_df = load_forecast_alerts()
 
 # ============================================================================
 # PAGE HEADER
@@ -229,11 +272,12 @@ if cleaned_df is None:
 # TABS
 # ============================================================================
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "🗺️ Live Map",
     "📈 Air Quality Trends",
     "🔬 Source Classification",
     "⚠️ Alerts Dashboard",
+    "🔮 24h PM2.5 Forecast",
     "🎯 Model Performance",
 ])
 
@@ -606,10 +650,227 @@ with tab4:
         )
 
 # ============================================================================
-# TAB 5 — MODEL PERFORMANCE
+# TAB 5 — 24H PM2.5 FORECAST (PROPHET)
 # ============================================================================
 
 with tab5:
+    st.header("24-Hour PM2.5 Forecast (City-Specific Prophet Models)")
+    st.markdown(
+        "One Prophet model is trained per city so each city's unique seasonal "
+        "patterns (e.g. Lahore's winter smog vs. Karachi's sea-breeze effect) "
+        "are captured independently.  Forward-looking alerts are generated when "
+        "predicted PM2.5 crosses the Unhealthy (100 µg/m³) or Hazardous (150 µg/m³) threshold."
+    )
+
+    if forecast_df is None:
+        st.warning(
+            "⚠️ City-specific forecast not found or uses an outdated format.  "
+            "Re-run `python src/model.py` to generate the updated city-specific "
+            "Prophet forecasts and forecast alerts."
+        )
+    else:
+        # ── City Selector ─────────────────────────────────────────────────────
+        forecast_cities = sorted(forecast_df["city"].unique())
+        selected_fc_city = st.selectbox(
+            "Select city to display forecast:",
+            options=forecast_cities,
+            index=0,
+            key="forecast_city_selector",
+        )
+
+        city_fc = forecast_df[forecast_df["city"] == selected_fc_city].copy()
+
+        # ── Summary Metrics ───────────────────────────────────────────────────
+        peak_val   = city_fc["pm25_predicted"].max()
+        trough_val = city_fc["pm25_predicted"].min()
+        peak_hour  = city_fc.loc[city_fc["pm25_predicted"].idxmax(), "timestamp"]
+        alert_lvls = city_fc["alert_level"].value_counts()
+
+        # Count forecast alerts for this city
+        n_fc_alerts = 0
+        if forecast_alerts_df is not None and "city" in forecast_alerts_df.columns:
+            n_fc_alerts = len(forecast_alerts_df[forecast_alerts_df["city"] == selected_fc_city])
+
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Peak Forecast",     f"{peak_val:.1f} µg/m³",
+                  help=f"At {peak_hour.strftime('%H:%M')}")
+        m2.metric("Min Forecast",      f"{trough_val:.1f} µg/m³")
+        m3.metric("Forecast Hours",    str(len(city_fc)))
+        m4.metric("Forecast Alerts",   str(n_fc_alerts),
+                  help="Number of forward-looking alerts triggered for this city")
+
+        st.markdown("---")
+
+        # ── Forecast Chart ────────────────────────────────────────────────────
+        st.markdown(f"### Hourly PM2.5 Forecast — {selected_fc_city}")
+
+        fig_fc = go.Figure()
+
+        # Shaded 95% confidence band (upper → lower filled as a closed polygon)
+        fig_fc.add_trace(go.Scatter(
+            x=pd.concat([city_fc["timestamp"], city_fc["timestamp"][::-1]]),
+            y=pd.concat([city_fc["pm25_upper"], city_fc["pm25_lower"][::-1]]),
+            fill="toself",
+            fillcolor="rgba(41, 128, 185, 0.15)",
+            line=dict(color="rgba(0,0,0,0)"),
+            name="95% Confidence Interval",
+            hoverinfo="skip",
+        ))
+
+        # Predicted line with alert-level colour coding via marker colour
+        alert_color_map = {"GREEN": "#2ecc71", "YELLOW": "#f1c40f",
+                           "ORANGE": "#e67e22", "RED": "#e74c3c"}
+        marker_colors = city_fc["alert_level"].map(alert_color_map).fillna("#2980b9")
+
+        fig_fc.add_trace(go.Scatter(
+            x=city_fc["timestamp"],
+            y=city_fc["pm25_predicted"],
+            mode="lines+markers",
+            name="PM2.5 Forecast",
+            line=dict(color="#2980b9", width=2),
+            marker=dict(size=7, color=marker_colors, line=dict(width=0.5, color="white")),
+            hovertemplate=(
+                "<b>%{x|%Y-%m-%d %H:%M}</b><br>"
+                "Predicted: %{y:.1f} µg/m³<extra></extra>"
+            ),
+        ))
+
+        # Reference lines
+        fig_fc.add_hline(
+            y=WHO_SAFE_LIMIT, line_dash="dash", line_color="green",
+            annotation_text=f"WHO limit ({WHO_SAFE_LIMIT} µg/m³)",
+            annotation_position="bottom right",
+        )
+        fig_fc.add_hline(
+            y=100, line_dash="dot", line_color="orange",
+            annotation_text="Unhealthy (100 µg/m³)",
+            annotation_position="top right",
+        )
+        fig_fc.add_hline(
+            y=150, line_dash="dot", line_color="red",
+            annotation_text="Hazardous (150 µg/m³)",
+            annotation_position="top right",
+        )
+
+        fig_fc.update_layout(
+            xaxis_title="Hour",
+            yaxis_title="PM2.5 (µg/m³)",
+            hovermode="x unified",
+            height=460,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02),
+        )
+
+        st.plotly_chart(fig_fc, use_container_width=True)
+
+        # ── Forecast Alerts ───────────────────────────────────────────────────
+        st.markdown("### Forward-Looking Forecast Alerts")
+
+        if forecast_alerts_df is None:
+            st.info(
+                "No forecast alerts generated — either no threshold breach is predicted "
+                "or `forecast_alerts.csv` has not been created yet.  "
+                "Re-run `python src/model.py` to regenerate."
+            )
+        else:
+            city_alerts = forecast_alerts_df[
+                forecast_alerts_df["city"] == selected_fc_city
+            ].copy()
+
+            if len(city_alerts) == 0:
+                st.success(
+                    f"No PM2.5 threshold breaches predicted in the next 24 hours for "
+                    f"{selected_fc_city}.  Air quality is expected to remain below "
+                    f"Unhealthy levels."
+                )
+            else:
+                st.warning(
+                    f"**{len(city_alerts)} forecast alert(s)** triggered for "
+                    f"{selected_fc_city} in the next 24 hours."
+                )
+
+                for _, alert_row in city_alerts.iterrows():
+                    level_icon = "🚨" if alert_row["alert_level"] == "RED" else "⚠️"
+                    with st.expander(
+                        f"{level_icon} {alert_row['aqi_level']} — "
+                        f"predicted {alert_row['pm25_predicted']:.0f} µg/m³ "
+                        f"at {alert_row['forecast_timestamp']} "
+                        f"(~{alert_row['hours_ahead']}h from now)",
+                        expanded=True,
+                    ):
+                        col_en, col_ur = st.columns(2)
+                        with col_en:
+                            st.markdown("**English**")
+                            st.info(alert_row["alert_text_en"])
+                        with col_ur:
+                            st.markdown("**اردو**")
+                            st.info(alert_row["alert_text_ur"])
+
+                        st.markdown(
+                            f"**At risk:** {alert_row['affected_groups']}  \n"
+                            f"**Actions:** {alert_row['protective_actions']}  \n"
+                            f"**Worst-case PM2.5:** {alert_row['pm25_upper']:.1f} µg/m³ "
+                            f"(95% confidence upper bound)"
+                        )
+
+            # Show all-cities forecast alert table
+            with st.expander("View all-city forecast alerts table", expanded=False):
+                if len(forecast_alerts_df) == 0:
+                    st.write("No forecast alerts across any city.")
+                else:
+                    display_fa = forecast_alerts_df[[
+                        "city", "forecast_timestamp", "hours_ahead",
+                        "pm25_predicted", "pm25_upper", "aqi_level",
+                        "alert_text_en",
+                    ]].copy()
+                    display_fa.columns = [
+                        "City", "Forecast Time", "Hours Ahead",
+                        "PM2.5 Predicted", "PM2.5 (Worst Case)", "AQI Level",
+                        "Alert (English)",
+                    ]
+                    st.dataframe(display_fa, use_container_width=True, hide_index=True)
+
+        st.markdown("---")
+
+        # ── Forecast Data Table ───────────────────────────────────────────────
+        with st.expander("View forecast data table", expanded=False):
+            display_fc = city_fc[["timestamp", "pm25_predicted",
+                                   "pm25_lower", "pm25_upper", "alert_level"]].copy()
+            display_fc["timestamp"] = display_fc["timestamp"].dt.strftime("%Y-%m-%d %H:%M")
+            display_fc.columns = ["Hour", "PM2.5 Forecast", "Lower Bound",
+                                   "Upper Bound", "Alert Level"]
+            st.dataframe(display_fc, use_container_width=True, hide_index=True)
+
+        # ── Static Multi-City Prophet Plot ────────────────────────────────────
+        if os.path.exists(FORECAST_PLOT_IMG):
+            st.markdown("### All-City Prophet Forecast Plot")
+            with st.expander("Show all-city forecast chart", expanded=False):
+                st.image(FORECAST_PLOT_IMG, use_container_width=True)
+
+        # ── Explanation ───────────────────────────────────────────────────────
+        st.markdown("---")
+        st.markdown("### How this forecast works")
+        st.markdown("""
+        **Facebook Prophet** is a time-series forecasting model designed for data
+        with strong seasonal patterns and holiday effects.
+
+        - One model is trained **per city** so Lahore's winter smog profile does
+          not dilute Karachi's sea-breeze pattern (or vice versa)
+        - Each model decomposes its city's signal into **trend + daily + weekly + yearly seasonality**
+        - Outputs a point forecast (`pm25_predicted`) and a **95% confidence interval**
+          (`pm25_lower` / `pm25_upper`) for each of the next 24 hours
+        - **Marker colours** on the forecast line show the alert level per hour:
+          🟢 GREEN ≤ 50 · 🟡 YELLOW ≤ 100 · 🟠 ORANGE ≤ 150 · 🔴 RED > 150
+        - **Forward-looking alerts** fire when `pm25_predicted` crosses 100 µg/m³ (Unhealthy)
+          or 150 µg/m³ (Hazardous); one alert per contiguous breach block to avoid alert fatigue
+        - Models saved at `models/prophet_{city}.pkl` — re-run `python src/model.py` to retrain
+        """)
+
+
+# ============================================================================
+# TAB 6 — MODEL PERFORMANCE
+# ============================================================================
+
+with tab6:
     st.header("Machine Learning Model Performance")
     st.markdown("""
     SmogAlert PK uses two ML models in tandem:

@@ -133,6 +133,27 @@ ALERT_TEMPLATES = {
         "protective_actions": "Stay indoors; seal windows and doors; avoid all outdoor activity",
     },
 
+    "general_smog": {
+        "alert_text_en": (
+            "⚠ Air Quality Alert — [CITY]. "
+            "Dangerously high concentrations of fine particulate matter (PM2.5) have been "
+            "detected, consistent with dense urban smog from diffuse low-level sources such "
+            "as traffic, domestic heating, and local industry acting together. "
+            "Children, elderly residents, and people with respiratory or heart conditions are "
+            "at serious risk. "
+            "Remain indoors, keep windows closed, and use an air purifier if available."
+        ),
+        "alert_text_ur": (
+            "⚠ فضائی آلودگی الرٹ — [CITY]۔ "
+            "باریک ذرات (PM2.5) کی انتہائی خطرناک سطح ریکارڈ کی گئی ہے جو گھنے شہری دھوئیں کی علامت ہے — "
+            "ٹریفک، گھریلو حرارت اور مقامی صنعت مل کر اس کا سبب بن رہے ہیں۔ "
+            "بچے، بزرگ اور دل و پھیپھڑوں کے مریض شدید خطرے میں ہیں۔ "
+            "گھر کے اندر رہیں، کھڑکیاں بند رکھیں اور ایئر پیوریفائر استعمال کریں اگر دستیاب ہو۔"
+        ),
+        "affected_groups":    "Children, elderly, people with respiratory or heart conditions",
+        "protective_actions": "Remain indoors; keep windows closed; use air purifier if available",
+    },
+
     # mixed and unclassified share a general template
     "mixed": {
         "alert_text_en": (

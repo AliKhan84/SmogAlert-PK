@@ -45,10 +45,14 @@ OUTPUT_PATH       = os.path.join(OUTPUTS_DIR, "anomalies_classified.csv")
 Z_SCORE_POLLUTANTS = ['so2', 'nh3', 'co', 'no', 'no2']
 
 # Rule thresholds — how many std-devs above the group mean counts as "elevated"
-Z_THRESHOLD = 1.5
+Z_THRESHOLD = 1.2
 
 # Dust rule threshold — PM10/PM2.5 ratio above this signals coarse dust
 DUST_RATIO_THRESHOLD = 3.0
+
+# General smog threshold — PM10/PM2.5 ratio below this means fine-particle dominated event
+# (ratio ~1.0–2.0 = mostly PM2.5, no dominant coarse-dust signal)
+GENERAL_SMOG_RATIO_MAX = 2.0
 
 # Confidence score normalisation denominator:
 #   z_score = 1.5  → raw excess = 0.0 → confidence ≈ 0.0
@@ -208,12 +212,19 @@ def evaluate_conditions(row, z_scores):
     cond_vehicular = (z_scores.get('no',  0.0) > Z_THRESHOLD and
                       z_scores.get('no2', 0.0) > Z_THRESHOLD)
 
+    # --- General Smog ---
+    # Fine-particle dominated event (PM10/PM2.5 < 2.0) with no dominant gas signature.
+    # Typical of dense urban haze or regional PM2.5 transport where many low-level
+    # sources contribute without any single emitter standing out chemically.
+    cond_general_smog = dust_ratio < GENERAL_SMOG_RATIO_MAX
+
     return {
-        'dust_storm':   cond_dust,
-        'industrial':   cond_industrial,
-        'crop_burning': cond_crop,
-        'vehicular':    cond_vehicular,
-        '_dust_ratio':  dust_ratio      # stored for confidence calculation
+        'dust_storm':    cond_dust,
+        'industrial':    cond_industrial,
+        'crop_burning':  cond_crop,
+        'vehicular':     cond_vehicular,
+        'general_smog':  cond_general_smog,
+        '_dust_ratio':   dust_ratio      # stored for confidence calculation
     }
 
 
@@ -240,7 +251,7 @@ def assign_source_label(conditions):
         str: One of: dust_storm, industrial, crop_burning, vehicular,
                      mixed, unclassified
     """
-    # Count how many of the four source conditions are true
+    # Count how many of the four specific source conditions are true
     individual_flags = [
         conditions['dust_storm'],
         conditions['industrial'],
@@ -259,6 +270,10 @@ def assign_source_label(conditions):
         return 'crop_burning'
     elif conditions['vehicular']:
         return 'vehicular'
+    elif conditions['general_smog']:
+        # Fine-particle dominated: PM2.5 spike with no single-source chemical fingerprint.
+        # Typical of dense urban haze from diffuse or mixed low-level emissions.
+        return 'general_smog'
     else:
         return 'unclassified'
 
@@ -301,11 +316,17 @@ def compute_confidence(source_label, conditions, z_scores):
         # For two-pollutant rules, use the weaker of the two (conservative)
         return min(_z_confidence(p1), _z_confidence(p2))
 
+    def _general_smog_confidence():
+        # Higher confidence the more fine-particle dominated: ratio 0 → 1.0, ratio 2.0 → 0.0
+        ratio = conditions.get('_dust_ratio', GENERAL_SMOG_RATIO_MAX)
+        return max(0.0, 1.0 - (ratio / GENERAL_SMOG_RATIO_MAX))
+
     label_confidence_map = {
         'dust_storm':   _dust_confidence(),
         'industrial':   _z_confidence('so2'),
         'crop_burning': _pair_confidence('nh3', 'co'),
         'vehicular':    _pair_confidence('no', 'no2'),
+        'general_smog': _general_smog_confidence(),
     }
 
     if source_label == 'mixed':
@@ -346,6 +367,12 @@ def build_signature(source_label, conditions, z_scores, row):
         return f"Highest z-score: {best_pollutant.upper()} ({best_z:.1f}σ)"
 
     parts = []
+
+    if source_label == 'general_smog':
+        ratio = conditions.get('_dust_ratio', 0.0)
+        pm25_val = row.get('pm25', np.nan)
+        pm25_str = f"{pm25_val:.0f} µg/m³" if pd.notna(pm25_val) else "—"
+        return f"Fine-particle smog (PM10/PM2.5={ratio:.1f}); PM2.5={pm25_str}"
 
     if conditions['dust_storm']:
         ratio = conditions.get('_dust_ratio', 0.0)

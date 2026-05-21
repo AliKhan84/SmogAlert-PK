@@ -78,10 +78,12 @@ TEST_SIZE = 0.2     # 20% of data for testing, 80% for training
 CONTAMINATION = 0.05  # Expect 5% of data to be anomalies
 
 # File paths - PART 3: Prophet Forecasting
-FORECAST_PLOT_OUTPUT = "outputs/forecast_plot.png"
-FORECAST_CSV_OUTPUT  = "outputs/forecast_24h.csv"
+FORECAST_PLOT_OUTPUT   = "outputs/forecast_plot.png"
+FORECAST_CSV_OUTPUT    = "outputs/forecast_24h.csv"
+FORECAST_ALERTS_OUTPUT = "outputs/forecast_alerts.csv"
 
 # Model parameters - PART 3: Prophet Forecasting
+UNHEALTHY_THRESHOLD = 100  # PM2.5 ≥ 100 µg/m³ = "Unhealthy" — minimum alert trigger
 HAZARDOUS_THRESHOLD = 150  # PM2.5 ≥ 150 µg/m³ = "Hazardous" (US EPA AQI scale)
 FORECAST_HOURS = 24        # How many hours ahead to predict
 
@@ -964,414 +966,480 @@ In our case, Prophet learns patterns like:
 """
 
 # ============================================================================
-# FUNCTION 14: Forecast PM2.5 with Prophet
+# FUNCTION 14 (helper): Classify a PM2.5 value into an alert colour level
 # ============================================================================
 
-def forecast_with_prophet(file_path, forecast_hours=24):
+def assign_forecast_alert_level(pm25_value):
     """
-    Load historical PM2.5 data, train a Prophet model, and forecast the next 24 hours.
+    Map a PM2.5 concentration to one of four SmogAlert colour levels.
 
-    Steps:
-      1. Load and filter cleaned_data.csv
-      2. Rename columns to 'ds' and 'y' (Prophet's required names)
-      3. Train Prophet on all historical data
-      4. Build a 24-hour future dataframe
-      5. Generate the forecast with confidence intervals
-      6. Plot: historical (blue) + forecast (green) + confidence band + hazardous line
-      7. Save plot → outputs/forecast_plot.png
-      8. Save forecast values → outputs/forecast_24h.csv
+    This is the same scale used across the pipeline so every module is
+    consistent.  Thresholds are based on the US EPA AQI breakpoints.
 
     Parameters:
-        file_path (str): Path to the cleaned data CSV (e.g. 'data/cleaned_data.csv')
-        forecast_hours (int): How many hours into the future to predict (default 24)
+        pm25_value (float): PM2.5 concentration in µg/m³
 
     Returns:
-        pandas.DataFrame: Forecast table with timestamp, predicted PM2.5, bounds, alert level
+        str: 'GREEN', 'YELLOW', 'ORANGE', or 'RED'
+    """
+    if pm25_value <= 50:
+        return 'GREEN'       # Good — air quality is satisfactory
+    elif pm25_value <= 100:
+        return 'YELLOW'      # Moderate — acceptable for most people
+    elif pm25_value <= 150:
+        return 'ORANGE'      # Unhealthy for sensitive groups
+    else:
+        return 'RED'         # Hazardous — serious health risk for all
+
+
+# ============================================================================
+# FUNCTION 15: Train Prophet and forecast for ONE city
+# ============================================================================
+
+def forecast_city_with_prophet(city_df, city_name, forecast_hours=24):
+    """
+    Train a Prophet model on one city's PM2.5 history and produce a
+    forecast for the next `forecast_hours` hours.
+
+    WHY ONE MODEL PER CITY?
+    =======================
+    A model trained on all five cities lumps together very different patterns:
+    - Lahore in winter regularly exceeds 300 µg/m³ (dense seasonal smog)
+    - Karachi in summer sits around 50–80 µg/m³ (sea-breeze effect)
+    Mixing these flattens the seasonal signal for each city.  Training a
+    separate Prophet per city lets each model learn the exact daily, weekly,
+    and yearly cycles specific to that location's climate and traffic.
+
+    Parameters:
+        city_df    (pd.DataFrame): Rows for this city from cleaned_data.csv.
+                                   Must have 'timestamp' and 'pm25' columns.
+        city_name  (str):          City label (e.g. 'Lahore') used for saving
+                                   the model and labelling outputs.
+        forecast_hours (int):      How many hours ahead to forecast (default 24).
+
+    Returns:
+        tuple: (future_forecast_df, last_training_ts) where
+               future_forecast_df has columns ds, yhat, yhat_lower, yhat_upper
+               and last_training_ts is the final historical timestamp.
     """
 
-    # -------------------------------------------------------------------------
-    # STEP 1: Load and Filter Data
-    # -------------------------------------------------------------------------
-    print("\n" + "=" * 70)
-    print("PART 3: PROPHET TIME-SERIES FORECASTING")
-    print("=" * 70)
-    print("\nSTEP 1: Loading Data for Forecasting")
-    print("-" * 50)
-
-    if not os.path.exists(file_path):
-        print(f"✗ Error: File not found at {file_path}")
-        print("  Please run src/preprocess.py first.")
-        return None
-
-    # Read the cleaned CSV
-    df = pd.read_csv(file_path)
-    print(f"✓ Loaded {len(df)} rows from {file_path}")
-
-    # Parse the timestamp column as proper datetime objects.
-    # pd.to_datetime() handles most common formats automatically.
-    df['timestamp'] = pd.to_datetime(df['timestamp'])
-
-    # Drop rows where PM2.5 is zero or negative (sensor errors)
-    df = df[df['pm25'] > 0].copy()
-    print(f"✓ After removing invalid readings: {len(df)} rows remain")
-
-    # ---- Choose which city (sensor location) to forecast ----
-    # Our dataset labels all rows city='Unknown' because the OpenAQ API didn't
-    # provide city names for this Pakistani sensor.  In a project with proper
-    # city data you would write:
-    #   df = df[df['city'] == 'Lahore']
-    # Since we only have one location, we select whichever city name has the
-    # most rows — that picks 'Unknown' here, but the logic is reusable.
-    city_counts = df['city'].value_counts()
-    most_common_city = city_counts.index[0]
-
-    print(f"\nCity distribution in dataset:")
-    for city, count in city_counts.items():
-        print(f"  '{city}': {count} rows")
-    print(f"\n→ Using '{most_common_city}' (most data available) for forecasting")
-
-    city_df = df[df['city'] == most_common_city].copy()
-    print(f"✓ Filtered to {len(city_df)} rows for '{most_common_city}'")
-
-    # -------------------------------------------------------------------------
-    # STEP 2: Prepare Data for Prophet
-    # -------------------------------------------------------------------------
-    print("\nSTEP 2: Preparing Data for Prophet")
-    print("-" * 50)
-
-    # ===================================================================
-    # WHY PROPHET NEEDS EXACTLY 'ds' AND 'y' COLUMN NAMES
-    # ===================================================================
-    # Prophet was designed with a strict API contract:
-    #   'ds' = datestamp  (your time column)  — "ds" comes from "date stamp"
-    #   'y'  = the value you want to forecast (your measurement column)
-    #
-    # The Facebook team hard-coded these names so their internal logic is
-    # consistent — every Prophet function knows exactly which column is time
-    # and which is the thing being predicted.
-    #
-    # If you pass a dataframe with columns named 'timestamp' and 'pm25',
-    # Prophet raises:  ValueError: Dataframe must have columns 'ds' and 'y'
-    #
-    # Think of it like filling out a government form: the form has fixed
-    # blank fields (Name: __, DOB: __).  You write YOUR data in THEIR fields.
-    # Prophet's fields are always 'ds' and 'y', no matter what your data
-    # originally called them.
-    # ===================================================================
-
+    # ---- Prepare Prophet input ----
+    # Prophet requires exactly two columns named 'ds' (datestamp) and 'y'
+    # (the value to forecast).  Any other column names raise a ValueError.
     prophet_df = city_df[['timestamp', 'pm25']].copy()
-    prophet_df = prophet_df.rename(columns={
-        'timestamp': 'ds',  # datestamp  — Prophet's required time column name
-        'pm25':      'y',   # the value  — Prophet's required measurement column name
-    })
-    print("✓ Renamed columns: 'timestamp' → 'ds',  'pm25' → 'y'")
-    print("  (Prophet requires exactly these two column names)")
-
-    # Sort chronologically — Prophet assumes data is ordered by time
+    prophet_df = prophet_df.rename(columns={'timestamp': 'ds', 'pm25': 'y'})
     prophet_df = prophet_df.sort_values('ds').reset_index(drop=True)
 
-    print(f"\nData range:")
-    print(f"  First reading : {prophet_df['ds'].min()}")
-    print(f"  Last  reading : {prophet_df['ds'].max()}")
-    print(f"  Total rows    : {len(prophet_df)}")
+    # Remove negative/zero PM2.5 readings (sensor errors)
+    prophet_df = prophet_df[prophet_df['y'] > 0]
 
-    # -------------------------------------------------------------------------
-    # STEP 3: Train the Prophet Model on All Historical Data
-    # -------------------------------------------------------------------------
-    print("\nSTEP 3: Training Prophet Model on All Historical Data")
-    print("-" * 50)
+    print(f"  {city_name:12}: {len(prophet_df):>6,} rows  "
+          f"({prophet_df['ds'].min().date()} → {prophet_df['ds'].max().date()})")
 
-    # Create a Prophet model.
-    # We enable all three seasonality levels so the model can capture:
-    #   daily   → rush-hour peaks within a single day
-    #   weekly  → weekday vs. weekend traffic differences
-    #   yearly  → winter smog season vs. summer months
-    # interval_width=0.95 means Prophet will draw a 95% confidence band
-    # (we explain confidence intervals fully in the plotting step below)
+    # ---- Train Prophet ----
+    # interval_width=0.95 → 95% confidence band in the forecast
     model = Prophet(
-        daily_seasonality=True,   # Learn patterns that repeat every 24 hours
-        weekly_seasonality=True,  # Learn patterns that repeat every 7 days
-        yearly_seasonality=True,  # Learn patterns that repeat every 12 months
-        interval_width=0.95       # Produce a 95% confidence interval
+        daily_seasonality=True,   # Rush-hour peaks within each day
+        weekly_seasonality=True,  # Weekday vs. weekend traffic differences
+        yearly_seasonality=True,  # Winter smog season vs. summer
+        interval_width=0.95,      # 95% confidence interval
     )
-
-    print("Model configuration:")
-    print("  daily_seasonality  = True  (rush-hour peaks)")
-    print("  weekly_seasonality = True  (weekday/weekend difference)")
-    print("  yearly_seasonality = True  (winter smog season)")
-    print("  interval_width     = 0.95  (95% confidence band)")
-    print(f"\nFitting model to {len(prophet_df)} historical data points ...")
-
-    # .fit() is where Prophet learns the trend and seasonality from our data.
-    # It decomposes the time series into three additive components:
-    #   PM2.5 = trend  +  seasonality  +  noise
-    # and learns parameters for each component automatically.
     model.fit(prophet_df)
-    print("✓ Prophet model training complete!")
 
-    # Save the trained model so we can reuse it without retraining
+    # ---- Save this city's model ----
+    model_path = f"models/prophet_{city_name}.pkl"
     os.makedirs("models", exist_ok=True)
-    joblib.dump(model, "models/prophet_model.pkl", compress=3)
-    print("✓ Prophet model saved to models/prophet_model.pkl")
+    joblib.dump(model, model_path, compress=3)
 
-    # -------------------------------------------------------------------------
-    # STEP 4: Create a Future Dataframe (the next 24 hours)
-    # -------------------------------------------------------------------------
-    print(f"\nSTEP 4: Building {forecast_hours}-Hour Future Timeframe")
-    print("-" * 50)
-
-    # make_future_dataframe() generates a table of timestamps:
-    #   - All historical timestamps (so the plot shows fitted vs. actual)
-    #   - PLUS `periods` new timestamps beyond the last known data point
-    # freq='h' means each new timestamp is 1 hour apart
-    future_df = model.make_future_dataframe(
-        periods=forecast_hours,
-        freq='h'  # 'h' = hourly (pandas frequency string)
-    )
+    # ---- Build the future dataframe and predict ----
+    # make_future_dataframe returns historical timestamps PLUS the next
+    # forecast_hours hourly slots beyond the last observed data point.
+    future_df = model.make_future_dataframe(periods=forecast_hours, freq='h')
+    forecast   = model.predict(future_df)
 
     last_training_ts = prophet_df['ds'].max()
 
-    print(f"✓ Future dataframe created:")
-    print(f"  Historical rows : {len(prophet_df)}  (used to show model fit on past data)")
-    print(f"  Forecast window : {last_training_ts} + {forecast_hours} hours")
-
-    # -------------------------------------------------------------------------
-    # STEP 5: Generate the Forecast
-    # -------------------------------------------------------------------------
-    print(f"\nSTEP 5: Generating Forecast")
-    print("-" * 50)
-
-    # .predict() runs the full forecast across every row in future_df.
-    # Key output columns:
-    #   'ds'          — the timestamp
-    #   'yhat'        — Prophet's best point estimate  ('yhat' = "y-hat",
-    #                   the statistics symbol for a predicted value)
-    #   'yhat_lower'  — lower bound of the confidence interval
-    #   'yhat_upper'  — upper bound of the confidence interval
-    forecast = model.predict(future_df)
-
-    # Slice out only timestamps strictly after the last training point
+    # Keep only the genuinely future rows (timestamps after last observation)
     future_forecast = forecast[forecast['ds'] > last_training_ts].copy()
 
-    print(f"✓ Forecast generated")
-    print(f"\n24-hour PM2.5 forecast summary:")
-    print(f"  Minimum predicted : {future_forecast['yhat'].min():.1f} µg/m³")
-    print(f"  Maximum predicted : {future_forecast['yhat'].max():.1f} µg/m³")
-    print(f"  Mean    predicted : {future_forecast['yhat'].mean():.1f} µg/m³")
+    return future_forecast, last_training_ts
+
+
+# ============================================================================
+# FUNCTION 16: Build forecast-based alert records for one city
+# ============================================================================
+
+def build_forecast_alerts(future_forecast, city_name, reference_ts):
+    """
+    Scan a 24-hour forecast and emit one alert record per contiguous block
+    of hours where the predicted PM2.5 exceeds the Unhealthy threshold.
+
+    WHY ONE ALERT PER BLOCK (NOT PER HOUR)?
+    ========================================
+    If the forecast shows 6 consecutive Unhealthy hours, emitting 6 identical
+    alerts creates noise and alert fatigue.  Instead we find the first hour of
+    each above-threshold block and emit a single forward-looking alert that
+    tells residents: "it's going to get bad at [time], roughly N hours from now."
+    This is how operational weather warning systems work.
+
+    Alert trigger levels:
+      PM2.5 ≥ 100 µg/m³ (Unhealthy)  → ORANGE forecast alert
+      PM2.5 ≥ 150 µg/m³ (Hazardous)  → RED    forecast alert
+
+    Parameters:
+        future_forecast (pd.DataFrame): Prophet prediction for future hours;
+                                        must have columns 'ds', 'yhat', 'yhat_upper'.
+        city_name       (str):          City name injected into alert text.
+        reference_ts    (pd.Timestamp): The last historical timestamp (= "now"
+                                        from the model's perspective), used to
+                                        calculate hours-ahead values.
+
+    Returns:
+        list[dict]: Alert records ready to be converted to a DataFrame.
+                    Returns an empty list if no threshold is breached.
+    """
+
+    # ---- Bilingual alert templates (forward-looking language) ----
+    # ORANGE: predicted PM2.5 ≥ 100 and < 150 (Unhealthy for sensitive groups)
+    ORANGE_EN = (
+        "⚠ Forecast Alert — {city}. "
+        "PM2.5 is predicted to reach {pm25:.0f} µg/m³ at {time} "
+        "(approximately {hours} hour(s) from now), entering Unhealthy levels. "
+        "Children, elderly residents, and people with respiratory conditions "
+        "should prepare to limit outdoor activity and keep windows closed."
+    )
+    ORANGE_UR = (
+        "⚠ پیشگوئی الرٹ — {city}۔ "
+        "PM2.5 کی سطح {time} پر {pm25:.0f} µg/m³ تک پہنچنے کی توقع ہے "
+        "(ابھی سے تقریباً {hours} گھنٹے بعد)، جو غیر صحت بخش حد میں ہوگی۔ "
+        "بچے، بزرگ اور سانس کے مریض باہر جانے کی سرگرمیاں کم کرنے کی تیاری کریں "
+        "اور کھڑکیاں بند رکھیں۔"
+    )
+
+    # RED: predicted PM2.5 ≥ 150 (Hazardous — serious risk for all residents)
+    RED_EN = (
+        "🚨 Forecast Alert — {city}. "
+        "PM2.5 is forecast to reach {pm25:.0f} µg/m³ at {time} "
+        "(approximately {hours} hour(s) from now), entering Hazardous territory. "
+        "All residents should arrange to stay indoors, avoid all outdoor activity, "
+        "and use an air purifier or N95 mask if going outside is unavoidable."
+    )
+    RED_UR = (
+        "🚨 پیشگوئی الرٹ — {city}۔ "
+        "PM2.5 {time} پر {pm25:.0f} µg/m³ تک پہنچنے کی پیشگوئی ہے "
+        "(ابھی سے تقریباً {hours} گھنٹے بعد)، جو خطرناک سطح ہے۔ "
+        "تمام شہری گھر کے اندر رہنے کا انتظام کریں، ہر قسم کی بیرونی سرگرمی سے گریز کریں "
+        "اور باہر جانا ناگزیر ہو تو N95 ماسک یا ایئر پیوریفائر استعمال کریں۔"
+    )
+
+    alert_records = []
+    # Use yhat (point estimate) to decide whether a breach occurs.
+    # yhat_upper (worst-case bound) is stored in the record so the dashboard
+    # can show the conservative scenario alongside the point estimate.
+    above_threshold = future_forecast['yhat'] >= UNHEALTHY_THRESHOLD
+
+    in_block   = False  # Are we currently inside an above-threshold block?
+    block_level = None  # 'ORANGE' or 'RED' for the current block
+
+    for _, row in future_forecast.iterrows():
+        predicted  = row['yhat']
+        upper      = row['yhat_upper']
+        ts         = row['ds']
+        hours_ahead = int(round((ts - reference_ts).total_seconds() / 3600))
+        time_label  = ts.strftime('%Y-%m-%d %H:%M')
+
+        if predicted >= UNHEALTHY_THRESHOLD:
+            level = 'RED' if predicted >= HAZARDOUS_THRESHOLD else 'ORANGE'
+
+            if not in_block:
+                # ---- First hour of a new breach block → emit alert ----
+                in_block    = True
+                block_level = level
+
+                if level == 'RED':
+                    en = RED_EN.format(city=city_name, pm25=predicted,
+                                       time=time_label, hours=hours_ahead)
+                    ur = RED_UR.format(city=city_name, pm25=predicted,
+                                       time=time_label, hours=hours_ahead)
+                    aff = "All residents"
+                    act = "Stay indoors; avoid all outdoor activity; use N95 mask or air purifier"
+                else:
+                    en = ORANGE_EN.format(city=city_name, pm25=predicted,
+                                          time=time_label, hours=hours_ahead)
+                    ur = ORANGE_UR.format(city=city_name, pm25=predicted,
+                                          time=time_label, hours=hours_ahead)
+                    aff = "Children, elderly, respiratory patients"
+                    act = "Limit outdoor activity; keep windows closed"
+
+                alert_records.append({
+                    'alert_type':       'forecast',
+                    'city':             city_name,
+                    'forecast_timestamp': time_label,
+                    'hours_ahead':      hours_ahead,
+                    'pm25_predicted':   round(predicted, 1),
+                    'pm25_upper':       round(upper, 1),
+                    'aqi_level':        'Hazardous' if level == 'RED' else 'Unhealthy',
+                    'alert_level':      level,
+                    'affected_groups':  aff,
+                    'protective_actions': act,
+                    'alert_text_en':    en,
+                    'alert_text_ur':    ur,
+                })
+            # If still in a block but level has escalated to RED, do nothing —
+            # the opening alert for this block already captured the breach.
+        else:
+            # Below threshold: reset block tracking
+            in_block    = False
+            block_level = None
+
+    return alert_records
+
+
+# ============================================================================
+# FUNCTION 17: Forecast all five cities and generate forecast alerts
+# ============================================================================
+
+def forecast_all_cities_with_prophet(file_path, forecast_hours=24):
+    """
+    Run the full city-specific Prophet pipeline:
+      1. Load cleaned_data.csv
+      2. For each city: train a dedicated Prophet model, forecast next 24 hours
+      3. Combine all city forecasts into one CSV
+      4. Generate forward-looking alerts for any city breaching PM2.5 thresholds
+      5. Save a multi-city subplot chart
+
+    Output files:
+      outputs/forecast_24h.csv     — combined forecast with 'city' column
+      outputs/forecast_alerts.csv  — forecast-based bilingual alerts
+      outputs/forecast_plot.png    — 5-panel city subplot
+      models/prophet_{city}.pkl    — one saved model per city
+
+    Parameters:
+        file_path      (str): Path to cleaned_data.csv
+        forecast_hours (int): Hours ahead to forecast per city (default 24)
+
+    Returns:
+        pd.DataFrame: Combined forecast table (all cities), or None on failure.
+    """
 
     # -------------------------------------------------------------------------
-    # STEP 6: Plot Historical Data + Forecast
+    # STEP 1: Load and validate cleaned data
     # -------------------------------------------------------------------------
-    print(f"\nSTEP 6: Creating Forecast Plot")
+    print("\n" + "=" * 70)
+    print("PART 3: CITY-SPECIFIC PROPHET FORECASTING")
+    print("=" * 70)
+    print("\nSTEP 1: Loading Data")
+    print("-" * 50)
+
+    if not os.path.exists(file_path):
+        print(f"✗ File not found: {file_path}")
+        print("  Run src/preprocess.py first.")
+        return None
+
+    df = pd.read_csv(file_path)
+    df['timestamp'] = pd.to_datetime(df['timestamp'])
+    df = df[df['pm25'] > 0].copy()
+
+    cities = sorted(df['city'].unique())
+    print(f"✓ Loaded {len(df):,} rows  |  cities: {cities}")
+
+    # -------------------------------------------------------------------------
+    # STEP 2: Train one Prophet model per city and collect forecasts
+    # -------------------------------------------------------------------------
+    print("\nSTEP 2: Training city-specific Prophet models")
+    print("-" * 50)
+
+    all_forecasts = []   # Collect per-city forecast DataFrames
+    all_alerts    = []   # Collect per-city alert records
+
+    for city in cities:
+        city_df = df[df['city'] == city].copy()
+
+        # Train and forecast — function handles its own model saving
+        future_forecast, last_ts = forecast_city_with_prophet(
+            city_df, city, forecast_hours
+        )
+
+        # ---- Shape the forecast DataFrame ----
+        # Keep only the four core columns and rename to match existing CSV schema
+        fc = future_forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].copy()
+        fc.columns = ['timestamp', 'pm25_predicted', 'pm25_lower', 'pm25_upper']
+        for col in ['pm25_predicted', 'pm25_lower', 'pm25_upper']:
+            fc[col] = fc[col].round(1)
+        fc['city']        = city
+        fc['alert_level'] = fc['pm25_predicted'].apply(assign_forecast_alert_level)
+
+        all_forecasts.append(fc)
+
+        # ---- Build forward-looking alerts for this city ----
+        city_alerts = build_forecast_alerts(future_forecast, city, last_ts)
+        all_alerts.extend(city_alerts)
+
+    # -------------------------------------------------------------------------
+    # STEP 3: Save combined forecast CSV
+    # -------------------------------------------------------------------------
+    print("\nSTEP 3: Saving combined forecast CSV")
     print("-" * 50)
 
     os.makedirs("outputs", exist_ok=True)
 
-    fig, ax = plt.subplots(figsize=(16, 7))
+    combined_fc = pd.concat(all_forecasts, ignore_index=True)
+    # Column order: city first so it's easy to filter in dashboards / pandas
+    combined_fc = combined_fc[['city', 'timestamp', 'pm25_predicted',
+                                'pm25_lower', 'pm25_upper', 'alert_level']]
+    combined_fc.to_csv(FORECAST_CSV_OUTPUT, index=False)
+    print(f"✓ Saved {len(combined_fc)} rows to {FORECAST_CSV_OUTPUT}")
 
-    # Show only the last 7 days of history to keep the chart readable
-    # (showing decades of data would compress everything into a tiny line)
-    recent_cutoff  = prophet_df['ds'].max() - pd.Timedelta(days=7)
-    recent_history = prophet_df[prophet_df['ds'] >= recent_cutoff]
+    # -------------------------------------------------------------------------
+    # STEP 4: Save forecast alerts CSV
+    # -------------------------------------------------------------------------
+    print("\nSTEP 4: Saving forecast alerts")
+    print("-" * 50)
 
-    # --- LINE 1: Historical PM2.5 — blue ---
-    ax.plot(
-        recent_history['ds'],
-        recent_history['y'],
-        color='steelblue',
-        linewidth=1.5,
-        alpha=0.8,
-        label='Historical PM2.5 (measured)',
-        zorder=3   # Draw above the confidence band
-    )
+    if all_alerts:
+        alerts_df = pd.DataFrame(all_alerts)
+        alerts_df.to_csv(FORECAST_ALERTS_OUTPUT, index=False)
+        print(f"✓ Saved {len(alerts_df)} forecast alert(s) to {FORECAST_ALERTS_OUTPUT}")
 
-    # --- LINE 2: Forecast — green ---
-    ax.plot(
-        future_forecast['ds'],
-        future_forecast['yhat'],   # 'yhat' = the predicted (estimated) value
-        color='forestgreen',
-        linewidth=2.5,
-        label=f'Forecast — next {forecast_hours} hours',
-        zorder=4   # Draw on top of everything else
-    )
+        print("\nForecast alerts by city:")
+        for city, cnt in alerts_df['city'].value_counts().items():
+            print(f"  {city:12}: {cnt} alert(s)")
+    else:
+        print("  No PM2.5 threshold breaches predicted in the next 24 hours — "
+              "no forecast alerts generated.")
+        # Write an empty file so downstream code can safely read it
+        pd.DataFrame(columns=[
+            'alert_type', 'city', 'forecast_timestamp', 'hours_ahead',
+            'pm25_predicted', 'pm25_upper', 'aqi_level', 'alert_level',
+            'affected_groups', 'protective_actions',
+            'alert_text_en', 'alert_text_ur',
+        ]).to_csv(FORECAST_ALERTS_OUTPUT, index=False)
 
-    # --- SHADED BAND: 95% Confidence Interval ---
-    # ===================================================================
-    # WHAT IS A CONFIDENCE INTERVAL?
-    # ===================================================================
-    # A confidence interval (CI) is a range around a prediction that tells
-    # us how certain we are.  A 95% CI means:
-    #   "We are 95% sure the real PM2.5 value will fall between
-    #    yhat_lower and yhat_upper at this future timestamp."
-    #
-    # WHY DOES THE BAND GET WIDER FURTHER INTO THE FUTURE?
-    #
-    # Think of predicting tomorrow's weather vs. next month's weather:
-    #   Tomorrow (1 day):    "~30°C"   — quite confident, narrow range (28–32)
-    #   Next week (7 days):  "~30°C"   — less confident, wider range (24–36)
-    #   Next month (30 days):"~30°C"   — much less confident (18–42)
-    #
-    # The same logic applies to air quality:
-    # 1. Small errors in hour 1 grow (compound) into larger errors in hour 24.
-    # 2. Unexpected events — a factory shutdown, sudden rain, traffic jam —
-    #    can shift PM2.5 up or down by the time we reach hour 24.
-    # 3. The model's learned patterns are most accurate for the near future
-    #    and become less reliable the further ahead we look.
-    #
-    # Mathematically, uncertainty grows roughly proportional to √(time),
-    # so 4 hours ahead has about twice the uncertainty of 1 hour ahead.
-    #
-    # In the chart, this widening appears as a green funnel shape.
-    # That funnel is a sign of HONEST forecasting — a model whose confidence
-    # band never widens is overconfident and almost certainly wrong.
-    # ===================================================================
-    ax.fill_between(
-        future_forecast['ds'],
-        future_forecast['yhat_lower'],   # Bottom edge of the confidence band
-        future_forecast['yhat_upper'],   # Top edge of the confidence band
-        alpha=0.20,            # Semi-transparent so lines beneath show through
-        color='forestgreen',   # Match the forecast line color
-        label='95% Confidence Interval\n(widens further into the future — normal and expected)'
-    )
+    # -------------------------------------------------------------------------
+    # STEP 5: Multi-city subplot figure (last 7 days history + 24h forecast)
+    # -------------------------------------------------------------------------
+    print("\nSTEP 5: Creating multi-city forecast plot")
+    print("-" * 50)
 
-    # --- DASHED LINE: Hazardous threshold at PM2.5 = 150 µg/m³ ---
-    # US EPA classifies PM2.5 ≥ 150.5 µg/m³ as "Hazardous" (AQI 201–300).
-    ax.axhline(
-        y=HAZARDOUS_THRESHOLD,
-        color='red',
-        linewidth=2,
-        linestyle='--',   # Dashed so it's clearly different from the data lines
-        alpha=0.8,
-        label=f'Hazardous Threshold (PM2.5 = {HAZARDOUS_THRESHOLD} µg/m³)'
-    )
+    n_cities = len(cities)
+    fig, axes = plt.subplots(n_cities, 1, figsize=(16, 5 * n_cities), sharex=False)
+    if n_cities == 1:
+        axes = [axes]
 
-    # Text label on the hazardous line (positioned using actual data range)
-    y_max_data = max(
-        recent_history['y'].max() if len(recent_history) else 0,
-        future_forecast['yhat_upper'].max()
-    )
-    ax.text(
-        x=future_forecast['ds'].iloc[-1],
-        y=HAZARDOUS_THRESHOLD + (y_max_data * 0.02),  # Slightly above the dashed line
-        s='⚠ Hazardous',
-        color='red',
-        fontsize=10,
-        fontweight='bold',
-        ha='right'
-    )
+    for ax, city in zip(axes, cities):
+        city_df    = df[df['city'] == city].copy().sort_values('timestamp')
+        city_fc    = combined_fc[combined_fc['city'] == city].copy()
 
-    # --- VERTICAL DIVIDER: separates history from forecast ---
-    history_end = prophet_df['ds'].max()
-    ax.axvline(
-        x=history_end,
-        color='gray',
-        linewidth=1.5,
-        linestyle=':',   # Dotted line to distinguish from data lines
-        alpha=0.6,
-        label='History / Forecast boundary'
-    )
-    ax.text(
-        x=history_end,
-        y=y_max_data * 0.97 if y_max_data > 0 else HAZARDOUS_THRESHOLD * 1.5,
-        s=' History | Forecast →',
-        color='gray',
-        fontsize=9,
-        va='top'
-    )
+        # Show only the last 7 days of history to keep the chart readable
+        recent_cutoff  = city_df['timestamp'].max() - pd.Timedelta(days=7)
+        recent_history = city_df[city_df['timestamp'] >= recent_cutoff]
 
-    # --- Axis labels, title, grid ---
-    ax.set_xlabel('Date and Time', fontsize=12)
-    ax.set_ylabel('PM2.5 Concentration (µg/m³)', fontsize=12)
-    ax.set_title(
-        f'PM2.5 Air Quality Forecast — Next {forecast_hours} Hours\n'
-        f'Location: {most_common_city}  |  Historical data + Prophet prediction',
-        fontsize=14,
-        fontweight='bold'
+        # Historical line (blue)
+        ax.plot(
+            recent_history['timestamp'],
+            recent_history['pm25'],
+            color='steelblue', linewidth=1.2, alpha=0.8,
+            label='Historical PM2.5', zorder=3
+        )
+
+        # Forecast line (green)
+        ax.plot(
+            city_fc['timestamp'],
+            city_fc['pm25_predicted'],
+            color='forestgreen', linewidth=2.0,
+            label=f'Forecast ({forecast_hours}h)', zorder=4
+        )
+
+        # 95% confidence band (green, semi-transparent)
+        # The band widens further into the future because uncertainty compounds
+        # over time — this is honest and expected behaviour, not a flaw.
+        ax.fill_between(
+            city_fc['timestamp'],
+            city_fc['pm25_lower'],
+            city_fc['pm25_upper'],
+            alpha=0.18, color='forestgreen',
+            label='95% Confidence Interval'
+        )
+
+        # Hazardous threshold line (red dashed)
+        ax.axhline(
+            y=HAZARDOUS_THRESHOLD,
+            color='red', linewidth=1.5, linestyle='--', alpha=0.7,
+            label=f'Hazardous ({HAZARDOUS_THRESHOLD} µg/m³)'
+        )
+
+        # Unhealthy threshold line (orange dotted) — alert trigger level
+        ax.axhline(
+            y=UNHEALTHY_THRESHOLD,
+            color='orange', linewidth=1.0, linestyle=':', alpha=0.7,
+            label=f'Unhealthy ({UNHEALTHY_THRESHOLD} µg/m³)'
+        )
+
+        # Vertical divider: history | forecast boundary
+        if not city_df.empty:
+            boundary = city_df['timestamp'].max()
+            ax.axvline(x=boundary, color='gray', linewidth=1.0,
+                       linestyle=':', alpha=0.6)
+
+        ax.set_title(f'{city}', fontsize=11, fontweight='bold')
+        ax.set_ylabel('PM2.5 (µg/m³)', fontsize=9)
+        ax.legend(loc='upper left', fontsize=7, framealpha=0.8, ncol=2)
+        ax.grid(True, alpha=0.2)
+        plt.setp(ax.get_xticklabels(), rotation=20, ha='right', fontsize=8)
+
+    fig.suptitle(
+        f'PM2.5 City-Specific Forecast — Next {forecast_hours} Hours  '
+        f'(City-specific Prophet models)',
+        fontsize=13, fontweight='bold', y=1.005
     )
-    ax.legend(loc='upper left', fontsize=9, framealpha=0.9)
-    ax.grid(True, alpha=0.3)
-    plt.xticks(rotation=30, ha='right')
     plt.tight_layout()
-
-    plt.savefig(FORECAST_PLOT_OUTPUT, dpi=300, bbox_inches='tight')
-    print(f"✓ Forecast plot saved to: {FORECAST_PLOT_OUTPUT}")
+    plt.savefig(FORECAST_PLOT_OUTPUT, dpi=150, bbox_inches='tight')
+    print(f"✓ Multi-city forecast plot saved: {FORECAST_PLOT_OUTPUT}")
     plt.close()
 
     # -------------------------------------------------------------------------
-    # STEP 7: Save Forecast to CSV
+    # Summary
     # -------------------------------------------------------------------------
-    print(f"\nSTEP 7: Saving 24-Hour Forecast to CSV")
-    print("-" * 50)
+    print("\nForecast summary per city:")
+    for city in cities:
+        city_fc = combined_fc[combined_fc['city'] == city]
+        print(f"  {city:12}: min={city_fc['pm25_predicted'].min():6.1f}  "
+              f"mean={city_fc['pm25_predicted'].mean():6.1f}  "
+              f"max={city_fc['pm25_predicted'].max():6.1f} µg/m³  "
+              f"| peak alert: {city_fc['alert_level'].iloc[city_fc['pm25_predicted'].values.argmax()]}")
 
-    # Keep only the columns a user actually needs; rename for clarity
-    forecast_out = future_forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].copy()
-    forecast_out.columns = [
-        'timestamp',        # The future hour
-        'pm25_predicted',   # Prophet's best estimate (the green line)
-        'pm25_lower',       # Lower bound of the 95% confidence interval
-        'pm25_upper',       # Upper bound of the 95% confidence interval
-    ]
-
-    # Round to 1 decimal place for readability
-    for col in ['pm25_predicted', 'pm25_lower', 'pm25_upper']:
-        forecast_out[col] = forecast_out[col].round(1)
-
-    # Add a human-readable alert level based on predicted PM2.5
-    def assign_alert(pm25_value):
-        """Classify a PM2.5 reading into the four SmogAlert alert levels."""
-        if pm25_value <= 50:
-            return 'GREEN'
-        elif pm25_value <= 100:
-            return 'YELLOW'
-        elif pm25_value <= 150:
-            return 'ORANGE'
-        else:
-            return 'RED'
-
-    forecast_out['alert_level'] = forecast_out['pm25_predicted'].apply(assign_alert)
-
-    forecast_out.to_csv(FORECAST_CSV_OUTPUT, index=False)
-    print(f"✓ Forecast saved to: {FORECAST_CSV_OUTPUT}")
-
-    print(f"\nFirst 6 forecast hours:")
-    print(forecast_out.head(6).to_string(index=False))
-
-    print(f"\nAlert level distribution across the 24-hour window:")
-    for level, count in forecast_out['alert_level'].value_counts().items():
-        pct = count / len(forecast_out) * 100
-        print(f"  {level:8s}: {count:2d} hours  ({pct:.0f}%)")
-
-    return forecast_out
+    return combined_fc
 
 
 # ============================================================================
-# FUNCTION 15: Main function for Prophet Forecasting
+# FUNCTION 18: Main function for Prophet Forecasting
 # ============================================================================
 
 def main_prophet_forecast():
     """
-    Orchestrates the full Prophet forecasting pipeline as Part 3.
+    Orchestrates the full city-specific Prophet forecasting pipeline as Part 3.
     """
     print("\n" + "=" * 70)
-    print("PART 3: PROPHET — 24-HOUR PM2.5 FORECAST")
+    print("PART 3: PROPHET — CITY-SPECIFIC 24-HOUR PM2.5 FORECAST")
     print("=" * 70)
 
-    forecast_df = forecast_with_prophet(INPUT_FILE, forecast_hours=FORECAST_HOURS)
+    forecast_df = forecast_all_cities_with_prophet(INPUT_FILE, forecast_hours=FORECAST_HOURS)
 
     if forecast_df is None:
         print("✗ Forecasting failed — check that cleaned_data.csv exists.")
         return
 
     print("\n" + "=" * 70)
-    print("✓ PROPHET FORECASTING COMPLETE!")
+    print("✓ CITY-SPECIFIC PROPHET FORECASTING COMPLETE!")
     print("=" * 70)
     print(f"\nGenerated files:")
     print(f"  1. Forecast plot   : {FORECAST_PLOT_OUTPUT}")
-    print(f"  2. Forecast CSV    : {FORECAST_CSV_OUTPUT}")
-    print(f"  3. Saved model     : models/prophet_model.pkl")
+    print(f"  2. Forecast CSV    : {FORECAST_CSV_OUTPUT}  (all 5 cities, 'city' column added)")
+    print(f"  3. Forecast alerts : {FORECAST_ALERTS_OUTPUT}")
+    print(f"  4. Saved models    : models/prophet_{{city}}.pkl  (one per city)")
     print(f"\nNext steps:")
-    print(f"  • Open {FORECAST_PLOT_OUTPUT} to see the chart")
-    print(f"  • Open {FORECAST_CSV_OUTPUT} to see the hourly predictions")
+    print(f"  • Open {FORECAST_PLOT_OUTPUT} to see the 5-city chart")
+    print(f"  • Open {FORECAST_CSV_OUTPUT} to browse hourly predictions")
     print(f"  • Run dashboard:  streamlit run dashboard/app.py")
 
 
