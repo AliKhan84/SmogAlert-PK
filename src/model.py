@@ -35,6 +35,7 @@ import numpy as np               # For numerical operations
 import matplotlib.pyplot as plt  # For creating plots and charts
 import seaborn as sns           # For beautiful statistical visualizations
 import joblib                   # For saving/loading machine learning models
+from datetime import datetime    # For anchoring forecasts to today's wall-clock time
 import os                       # For file and directory operations
 
 # Facebook Prophet for time-series forecasting
@@ -1037,8 +1038,13 @@ def forecast_city_with_prophet(city_df, city_name, forecast_hours=24):
           f"({prophet_df['ds'].min().date()} → {prophet_df['ds'].max().date()})")
 
     # ---- Train Prophet ----
-    # interval_width=0.95 → 95% confidence band in the forecast
+    # growth='flat' removes the trend component so Prophet relies only on
+    # seasonality.  When forecasting ~18 months beyond the training window
+    # a linear trend would extrapolate the late-2024 downward slope all the
+    # way to negative PM2.5 — physically impossible and misleading.  Flat
+    # growth anchors predictions to the seasonal mean instead.
     model = Prophet(
+        growth='flat',            # Seasonality only — no trend extrapolation
         daily_seasonality=True,   # Rush-hour peaks within each day
         weekly_seasonality=True,  # Weekday vs. weekend traffic differences
         yearly_seasonality=True,  # Winter smog season vs. summer
@@ -1051,18 +1057,36 @@ def forecast_city_with_prophet(city_df, city_name, forecast_hours=24):
     os.makedirs("models", exist_ok=True)
     joblib.dump(model, model_path, compress=3)
 
-    # ---- Build the future dataframe and predict ----
-    # make_future_dataframe returns historical timestamps PLUS the next
-    # forecast_hours hourly slots beyond the last observed data point.
-    future_df = model.make_future_dataframe(periods=forecast_hours, freq='h')
-    forecast   = model.predict(future_df)
-
     last_training_ts = prophet_df['ds'].max()
 
-    # Keep only the genuinely future rows (timestamps after last observation)
-    future_forecast = forecast[forecast['ds'] > last_training_ts].copy()
+    # ---- Build the future dataframe anchored to today's wall-clock time ----
+    # We do NOT use make_future_dataframe() here because that method generates
+    # timestamps starting from the last observed data point (Dec 2024), which
+    # would produce a forecast for the past.  Instead we build a date range
+    # starting from the current hour so the forecast covers the next 24 hours
+    # from right now — regardless of when the training data ended.
+    #
+    # Prophet learned the daily / weekly / yearly seasonal patterns from the
+    # training history; it can extrapolate those patterns to any future date,
+    # so today's date is a perfectly valid input even though the training data
+    # ended ~18 months earlier.
+    forecast_start = datetime.now().replace(minute=0, second=0, microsecond=0)
+    future_timestamps = pd.date_range(start=forecast_start,
+                                      periods=forecast_hours, freq='h')
+    future_df = pd.DataFrame({'ds': future_timestamps})
+    forecast  = model.predict(future_df)
 
-    return future_forecast, last_training_ts
+    # PM2.5 cannot be negative — clip any residual negative confidence-bound
+    # values that occasionally appear from the seasonality decomposition.
+    for col in ['yhat', 'yhat_lower', 'yhat_upper']:
+        forecast[col] = forecast[col].clip(lower=0)
+
+    # All rows are already future timestamps — no filtering needed
+    future_forecast = forecast.copy()
+
+    # Return forecast_start as the reference so hours_ahead in alerts is
+    # measured from "now" rather than from the end of the training window.
+    return future_forecast, forecast_start
 
 
 # ============================================================================
