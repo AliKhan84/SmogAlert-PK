@@ -15,12 +15,11 @@ src/alert_system.py       →  Bilingual (English + Urdu) alert generation
 dashboard/app.py          →  Streamlit dashboard
 ```
 
-**3-stage core pipeline:**
+**4-stage pipeline:**
 1. **Anomaly Detection** — per-city-season Isolation Forest flags unusual pollution spikes
-2. **Source Classification** — chemical fingerprint rules identify the likely pollution source (vehicle emissions, industrial, dust storms, crop burning, etc.)
-3. **Alert Generation** — source-driven bilingual templates produce structured alerts for Unhealthy/Hazardous readings
-
-Plus a **Prophet 24-hour PM2.5 forecast** with confidence intervals.
+2. **Source Classification** — chemical fingerprint rules identify the likely pollution source (vehicular, industrial, dust storms, crop burning, etc.)
+3. **Alert Generation** — source-driven bilingual (English + Urdu) templates produce structured alerts for Unhealthy/Hazardous readings
+4. **24h PM2.5 Forecasting** — one Prophet model per city captures city-specific seasonal patterns and forecasts the next 24 hours with 95% confidence intervals; forward-looking alerts fire on predicted threshold breaches
 
 ---
 
@@ -54,7 +53,7 @@ SmogAlert-PK/
 ├── models/
 │   ├── isolation_forest_{city_season}.pkl  # 20 per-city-season models
 │   ├── random_forest_model.pkl             # AQI level classifier
-│   └── prophet_model.pkl                   # 24-hour PM2.5 forecast model
+│   └── prophet_{city}.pkl                  # 5 city-specific 24h PM2.5 forecast models
 ├── outputs/
 │   ├── anomalies.csv              # 5,765 detected anomalous readings
 │   ├── anomalies_classified.csv   # Anomalies + source labels
@@ -102,13 +101,16 @@ The `outputs/` and `models/` files are already included in this repo — you can
 streamlit run dashboard/app.py
 ```
 
-Opens at `http://localhost:8501`. Features include:
+Opens at `http://localhost:8501`. Six tabs:
 
-- Interactive map of anomaly locations by city
-- Anomaly timeline by pollutant and season
-- Source classification breakdown
-- Bilingual alert table (English + Urdu)
-- 24-hour PM2.5 forecast with confidence band
+| Tab | Description |
+|-----|-------------|
+| 🗺️ Live Map | Latest PM2.5 per city on an interactive Folium map |
+| 📈 Air Quality Trends | PM2.5 timeline with season bands and anomaly markers |
+| 🔬 Source Classification | Emission source breakdown by type and city |
+| ⚠️ Alerts Dashboard | Filterable bilingual alert table (English + Urdu) with download |
+| 🔮 24h PM2.5 Forecast | City-specific Prophet forecast with confidence band and forward-looking alerts |
+| 🎯 Model Performance | Confusion matrix, feature importance, anomaly counts per city |
 
 ---
 
@@ -119,6 +121,16 @@ Opens at `http://localhost:8501`. Features include:
 - **Alert criteria**: test split only, AQI level Unhealthy or Hazardous.
 - **Bilingual alerts**: both English and Urdu text are kept for every alert record.
 - **Prophet forecasting**: trained on all historical PM2.5 data; outputs next 24 hours with upper/lower confidence intervals.
+
+---
+
+## Team — SmogNet Datathon (UET Mardan)
+
+- **Ali Khan**
+- Younas Khan
+- M Sudais
+- Abdullah Hasan Shah
+- M Osama
 
 ---
 

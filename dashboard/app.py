@@ -1,14 +1,16 @@
 """
-SmogAlert PK - Interactive Dashboard (SmogNet Datathon Edition)
+SmogAlert PK - Interactive Air Quality Dashboard
 
-Streamlit dashboard for the 3-stage pipeline:
-  anomaly detection → source classification → alert generation
+Streamlit dashboard for the 4-stage pipeline:
+  anomaly detection → source classification → alert generation → 24h PM2.5 forecast
 
 Data files consumed:
   - data/cleaned_data.csv             (all 127,551 cleaned readings, 5 cities)
   - outputs/anomalies.csv             (5,765 detected anomalies)
   - outputs/anomalies_classified.csv  (anomalies + source label)
   - outputs/alerts_log.csv            (372 structured bilingual alerts)
+  - outputs/forecast_24h.csv          (city-specific 24h Prophet PM2.5 forecasts)
+  - outputs/forecast_alerts.csv       (forward-looking forecast alerts)
 
 WHAT IS STREAMLIT?
 ==================
@@ -985,21 +987,12 @@ with st.sidebar:
     1. 🔍 Anomaly detection (Isolation Forest)
     2. 🏷️ Source classification (rule-based fingerprints)
     3. 📢 Bilingual alert generation
+    4. 🔮 24h PM2.5 forecasting (Prophet)
 
     **Coverage:**
     - 5 cities: Islamabad, Karachi, Lahore, Peshawar, Quetta
     - 8 pollutants: PM2.5, PM10, NO, NO₂, SO₂, NH₃, CO, O₃
     - Aug 2021 – Dec 2024
-    """)
-
-    st.markdown("---")
-    st.markdown("### Team — SmogNet Datathon")
-    st.markdown("""
-    - **Ali Khan**
-    - Younas Khan
-    - M Sudais
-    - Abdullah Hasan Shah
-    - M Osama
     """)
 
     st.markdown("---")
