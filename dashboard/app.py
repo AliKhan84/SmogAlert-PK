@@ -251,8 +251,7 @@ forecast_alerts_df = load_forecast_alerts()
 
 st.title("🌫️ SmogAlert PK — Air Quality Intelligence Dashboard")
 st.markdown(
-    "**SmogNet Datathon · UET Mardan** — "
-    "Anomaly detection → source classification → public health alerts "
+    "Anomaly detection → source classification → public health alerts → 24h PM2.5 forecasting "
     "across 5 Pakistani cities (Aug 2021 – Dec 2024)"
 )
 st.markdown("---")
@@ -1027,7 +1026,7 @@ with st.sidebar:
 st.markdown("---")
 st.markdown(
     "<div style='text-align:center'>"
-    "<p>SmogAlert PK © 2026 · SmogNet Datathon · "
+    "<p>SmogAlert PK © 2026 · "
     "Built with Streamlit · Maps by Folium · Charts by Plotly</p>"
     "</div>",
     unsafe_allow_html=True,
