@@ -993,6 +993,16 @@ with st.sidebar:
     """)
 
     st.markdown("---")
+    st.markdown("### Team — SmogNet Datathon")
+    st.markdown("""
+    - **Ali Khan**
+    - Younas Khan
+    - M Sudais
+    - Abdullah Hasan Shah
+    - M Osama
+    """)
+
+    st.markdown("---")
     st.markdown("### Data Source")
     st.markdown(
         "Kaggle: `hajramohsin/`  \n"
