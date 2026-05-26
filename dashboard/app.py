@@ -35,7 +35,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import folium
-from streamlit_folium import folium_static
+from streamlit_folium import st_folium
 import os
 from datetime import datetime
 
@@ -47,8 +47,48 @@ st.set_page_config(
     page_title="SmogAlert PK",
     page_icon="🌫️",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="auto"
 )
+
+# ── Mobile-responsive CSS ─────────────────────────────────────────────────────
+st.markdown("""
+<style>
+@media (max-width: 768px) {
+    /* Stack all side-by-side columns vertically */
+    [data-testid="stHorizontalBlock"] { flex-wrap: wrap !important; }
+    [data-testid="column"] {
+        width: 100% !important;
+        flex: 1 1 100% !important;
+        min-width: 100% !important;
+    }
+    /* Shrink headings */
+    h1 { font-size: 1.4rem !important; line-height: 1.3 !important; }
+    h2 { font-size: 1.15rem !important; }
+    h3 { font-size: 1rem !important; }
+    /* Tab bar: scrollable instead of wrapping */
+    [data-testid="stTabs"] > div[role="tablist"] {
+        overflow-x: auto !important;
+        -webkit-overflow-scrolling: touch !important;
+        scrollbar-width: none !important;
+    }
+    [data-testid="stTabs"] > div[role="tablist"]::-webkit-scrollbar { display: none; }
+    button[data-baseweb="tab"] {
+        white-space: nowrap !important;
+        font-size: 0.72rem !important;
+        padding: 0.35rem 0.6rem !important;
+    }
+    /* Dataframes and iframes: scroll horizontally */
+    .stDataFrame { overflow-x: auto !important; }
+    iframe { width: 100% !important; max-width: 100% !important; }
+    /* Prevent code from overflowing */
+    pre, code { white-space: pre-wrap !important; word-break: break-word !important; }
+    /* Metric cards: a bit of breathing room when stacked */
+    [data-testid="stMetric"] { margin-bottom: 0.4rem; }
+}
+/* Always make Folium iframes fill their container */
+.element-container iframe { max-width: 100% !important; }
+</style>
+""", unsafe_allow_html=True)
 
 # ============================================================================
 # CONSTANTS
@@ -354,7 +394,7 @@ with tab1:
             ),
         ).add_to(pakistan_map)
 
-    folium_static(pakistan_map, width=1200, height=580)
+    st_folium(pakistan_map, use_container_width=True, height=500, returned_objects=[])
 
     # --- Legend ----------------------------------------------------------------
     st.markdown("### Legend")
