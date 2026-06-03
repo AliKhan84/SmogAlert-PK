@@ -754,7 +754,7 @@ with tab5:
             fill="toself",
             fillcolor="rgba(41, 128, 185, 0.15)",
             line=dict(color="rgba(0,0,0,0)"),
-            name="95% Confidence Interval",
+            name="80% Confidence Interval",
             hoverinfo="skip",
         ))
 
