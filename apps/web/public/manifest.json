@@ -1,0 +1,39 @@
+{
+  "name": "SmogAlert PK",
+  "short_name": "SmogAlert",
+  "description": "Real-time air quality alerts for Pakistan",
+  "start_url": "/dashboard",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#0d9488",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["health", "weather"],
+  "lang": "en-PK",
+  "dir": "ltr",
+  "shortcuts": [
+    {
+      "name": "Dashboard",
+      "url": "/dashboard",
+      "description": "View live AQI for all cities"
+    },
+    {
+      "name": "Settings",
+      "url": "/settings",
+      "description": "Manage alert preferences"
+    }
+  ]
+}

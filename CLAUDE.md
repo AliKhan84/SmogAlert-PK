@@ -4,38 +4,103 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-SmogAlert PK is an air quality monitoring and alert system for Pakistan, built for the **SmogNet Datathon (UET Mardan)**. It implements a 3-stage pipeline — anomaly detection → source classification → alert generation — over a Kaggle dataset covering 5 Pakistani cities and 8 pollutants (Aug 2021 – Dec 2024).
+SmogAlert PK is an air quality monitoring and alert system for Pakistan. It started as a Streamlit ML demo for the **SmogNet Datathon (UET Mardan)** and is now being upgraded into a **production SaaS** with real-time AQI monitoring, predictive alerts, SMS/WhatsApp delivery, and an AI-driven live data pipeline.
 
-**Full execution plan**: `docs/EXECUTION_PLAN.md` — read this before starting any new phase.
+**Full SaaS upgrade plan**: `plan.md` — read this before starting any new phase.
 
-**Phase status**:
-- [x] Phase 0 — Dataset acquisition & audit
-- [x] Phase 1 — Data layer rebuild (download_data.py + preprocess.py)
-- [x] Phase 2 — City + season-aware anomaly detection (model.py)
-- [x] Phase 3 — Source classification (source_classifier.py)
-- [x] Phase 4 — Enhanced alert generation (alert_system.py)
-- [x] Phase 5 — Dashboard upgrade (app.py)
-- [x] Phase 6 — End-to-end validation
-
-## Architecture
-
-The project follows a linear pipeline:
+## Current Architecture (Monorepo)
 
 ```
-download_data.py
-  → src/preprocess.py
-    → src/model.py
-      → src/source_classifier.py
-        → src/alert_system.py
-          → dashboard/app.py
+SmogAlert-PK/
+├── apps/
+│   ├── web/          # Next.js 14 frontend (Tailwind + shadcn/ui + Clerk auth)
+│   └── api/          # FastAPI backend (SQLAlchemy + Alembic + Celery + Redis)
+├── packages/
+│   └── ml/           # Existing ML pipeline (moved from src/ + dashboard/)
+├── agents/
+│   ├── data_scraper.py       # Live AQI scraper (OpenAQ + WAQI + OpenMeteo + EPA)
+│   └── backfill_kaggle_data.py  # One-time backfill of Kaggle data into DB
+├── data/             # Raw + cleaned CSV data (static Kaggle dataset)
+├── models/           # Trained .pkl files (Isolation Forest, RandomForest, Prophet)
+├── outputs/          # Pipeline output CSVs and plots
+├── docs/
+├── .github/
+│   └── workflows/    # ci.yml (lint + test) + cron.yml (daily retrain)
+├── plan.md           # Full SaaS phase plan
+└── CLAUDE.md
 ```
 
-1. **Data Acquisition** — `download_data.py`: reads individual city files from `data/Training/` and `data/Testing/`, merges into one combined CSV.
-2. **Preprocessing** — `src/preprocess.py`: cleans data, handles 8 pollutants, adds seasonal features, train/test split column.
-3. **Anomaly Detection + Forecasting** — `src/model.py`: per-city-season Isolation Forest; Random Forest AQI classifier; Prophet 24-hour PM2.5 forecast.
-4. **Source Classification** — `src/source_classifier.py`: rule-based chemical fingerprint classification of anomalies.
-5. **Alert Generation** — `src/alert_system.py`: source-driven bilingual (English + Urdu) template alerts.
-6. **Dashboard** — `dashboard/app.py`: Streamlit app with map, anomaly timeline, source classification tab, alert table.
+## SaaS Phase Status
+
+| Phase | Description | Status |
+|-------|-------------|--------|
+| Phase 1 | Repo restructure & monorepo setup | ~90% done |
+| Phase 2 | Live data layer & AI scraping agent | ~60% done |
+| Phase 3 | Database schema & FastAPI backend | ~70% done |
+| Phase 4 | User management & alert preferences | ~40% done |
+| Phase 5 | Alert engine (email/WhatsApp/SMS) | ~40% done |
+| Phase 6 | Next.js frontend web app | ~60% done |
+| Phase 7 | ML pipeline integration into API | ~40% done |
+| Phase 8 | Deployment (Railway + Vercel + Supabase) | ~10% done |
+| Phase 9 | Mobile app (React Native + Expo) | 0% — future |
+
+## Tech Stack
+
+### Frontend (`apps/web/`)
+- **Next.js 14** (App Router) + **Tailwind CSS** + **shadcn/ui**
+- **Clerk** for auth (middleware, sign-in/sign-up routes)
+- **React Leaflet** for Pakistan AQI map
+- **Recharts** for forecast + time-series charts
+- **Zustand** for global state, **Supabase Realtime** for live updates
+
+### Backend (`apps/api/`)
+- **FastAPI** with async SQLAlchemy + Alembic migrations
+- **Celery** workers: `alert_task`, `retrain_task`, `scrape_task`
+- **Redis** (Upstash) for caching and Celery broker
+- Routers: `/auth`, `/users`, `/aqi`, `/alerts`, `/admin`
+
+### Database
+- **PostgreSQL** via **Supabase** (free tier)
+- Key tables: `users`, `user_locations`, `subscriptions`, `alert_preferences`, `alerts_sent`, `aqi_readings`, `forecasts`, `model_versions`
+
+### Alerts
+- **Email**: Resend API
+- **WhatsApp**: Meta Cloud API (WhatsApp Business)
+- **SMS**: Twilio
+
+### Live Data Sources
+- **OpenAQ v3 API** — Lahore, Karachi, Islamabad (free)
+- **WAQI API** — all 5 PK cities (free key)
+- **OpenMeteo** — fallback for missing cities
+- **EPA Pakistan scraper** — Playwright headless (best-effort)
+
+### Deployment
+- Frontend: **Vercel**
+- Backend + Celery workers: **Railway** ($5/month free credit)
+- Models: **Cloudflare R2** (10 GB free)
+
+## ML Pipeline (Legacy — now in `packages/ml/`)
+
+The original datathon pipeline is preserved and powers the API's forecast endpoint.
+
+```
+packages/ml/download_data.py
+  → packages/ml/src/preprocess.py
+    → packages/ml/src/model.py          # Isolation Forest + RF + Prophet
+      → packages/ml/src/source_classifier.py
+        → packages/ml/src/alert_system.py
+          → packages/ml/dashboard/app.py  # Legacy Streamlit dashboard
+```
+
+**Run legacy pipeline** (still works from repo root):
+```bash
+python download_data.py
+python src/preprocess.py
+python src/model.py
+python src/source_classifier.py
+python src/alert_system.py
+streamlit run dashboard/app.py
+```
 
 ## Dataset
 
@@ -43,68 +108,75 @@ download_data.py
 
 - 5 cities: Islamabad, Karachi, Lahore, Peshawar, Quetta
 - 8 pollutants: PM2.5, PM10, NO, NO2, SO2, NH3, CO, O3
-- Training: Aug 2021 – Jun 2024 (`data/Training/`) — 103,794 rows after cleaning
-- Testing: Jul – Dec 2024 (`data/Testing/`) — 23,757 rows after cleaning
+- Training: Aug 2021 – Jun 2024 (`data/Training/`) — 103,794 rows
+- Testing: Jul – Dec 2024 (`data/Testing/`) — 23,757 rows
 - Split boundary: `2024-07-01`
 
-**File formats** (important — affects date parsing):
-- `data/Training/*.xlsx` (Islamabad, Karachi, Lahore): dates as `YYYY-MM-DD`
-- `data/Training/*.csv` (Peshawar, Quetta): dates as `DD/MM/YYYY`
-- `data/Testing/*.csv` (all cities): dates as `D/M/YYYY`
-- All parsed with `dayfirst=True` in `download_data.py` and normalised to ISO format before saving.
+**File formats** (affects date parsing):
+- `data/Training/*.xlsx` (Islamabad, Karachi, Lahore): `YYYY-MM-DD`
+- `data/Training/*.csv` (Peshawar, Quetta): `DD/MM/YYYY`
+- `data/Testing/*.csv` (all cities): `D/M/YYYY`
+- All parsed with `dayfirst=True`, normalised to ISO before saving.
 
 ## Data Flow
 
 | Path | Description |
 |------|-------------|
-| `data/Training/` | 5 city files (3 xlsx + 2 csv), Aug 2021 – Jun 2024 |
-| `data/Testing/` | 5 city CSV files, Jul – Dec 2024 |
-| `data/raw_aqi_data.csv` | Merged raw data, 162,993 rows, 5 cities |
-| `data/pakistan_aq_raw.csv` | Canonical copy of merged raw data |
-| `data/cleaned_data.csv` | Preprocessed data, 127,551 rows, 20 columns incl. season, city_season, split |
-| `models/random_forest_model.pkl` | Trained Random Forest AQI classifier |
-| `models/isolation_forest_{city_season}.pkl` | One Isolation Forest model per city-season group (20 files) |
-| `models/prophet_model.pkl` | Trained Prophet model for 24-hour PM2.5 forecasting |
-| `outputs/anomalies.csv` | Detected anomalous readings, 5,765 rows, all 8 pollutants |
-| `outputs/anomalies_classified.csv` | Anomalies + source_label, source_confidence, pollutant_signature |
-| `outputs/alerts_log.csv` | Structured bilingual alerts, test-window Unhealthy/Hazardous anomalies |
-| `outputs/forecast_24h.csv` | 24-hour PM2.5 forecast values with confidence intervals |
-| `outputs/anomaly_plot.png` | Anomaly timeline visualisation |
-| `outputs/confusion_matrix.png` | Random Forest classifier confusion matrix |
-| `outputs/feature_importance.png` | Random Forest feature importance chart |
-| `outputs/forecast_plot.png` | Prophet 24-hour PM2.5 forecast plot |
+| `data/Training/` | 5 city files (3 xlsx + 2 csv) |
+| `data/Testing/` | 5 city CSV files |
+| `data/raw_aqi_data.csv` | Merged raw data, 162,993 rows |
+| `data/cleaned_data.csv` | Preprocessed, 127,551 rows, 20 columns |
+| `models/random_forest_model.pkl` | Trained RF AQI classifier |
+| `models/isolation_forest_{city_season}.pkl` | 20 Isolation Forest models |
+| `models/prophet_{city}.pkl` | Per-city Prophet PM2.5 forecast models |
+| `outputs/anomalies.csv` | Detected anomalies, 5,765 rows |
+| `outputs/anomalies_classified.csv` | Anomalies + source labels |
+| `outputs/alerts_log.csv` | Bilingual alerts (Unhealthy/Hazardous only) |
+| `outputs/forecast_24h.csv` | 24-hour PM2.5 forecast with CI bands |
 
 ## Development Commands
 
-### Setup
+### Legacy ML pipeline
 ```bash
 pip install -r requirements.txt
+python download_data.py
+python src/preprocess.py
+python src/model.py
+python src/source_classifier.py
+python src/alert_system.py
+streamlit run dashboard/app.py   # http://localhost:8501
 ```
 
-### Full Pipeline (run in order)
+### FastAPI backend
 ```bash
-python download_data.py           # Merge all city files → data/raw_aqi_data.csv
-python src/preprocess.py          # Clean + engineer features → data/cleaned_data.csv
-python src/model.py               # Anomaly detection + RF classifier → outputs/anomalies.csv
-python src/source_classifier.py   # Source classification → outputs/anomalies_classified.csv
-python src/alert_system.py        # Alert generation → outputs/alerts_log.csv
+cd apps/api
+pip install -r requirements.txt
+uvicorn main:app --reload        # http://localhost:8000
 ```
 
-### Dashboard
+### Next.js frontend
 ```bash
-streamlit run dashboard/app.py
-# Opens at http://localhost:8501
+cd apps/web
+npm install
+npm run dev                      # http://localhost:3000
+```
+
+### Celery workers
+```bash
+cd apps/api
+celery -A workers.celery_app worker --loglevel=info
+celery -A workers.celery_app beat  --loglevel=info
 ```
 
 ## Key Design Decisions
 
-- **Source classifier is rule-based** (not ML): chemical fingerprint thresholds — fast, interpretable, datathon-friendly.
-- **Anomaly detection is per-city-season**: one Isolation Forest per `city_season` group (e.g., `Lahore_Winter`), trained on training split only. Contamination = 5%.
-- **Anomaly features**: `pm25`, `pm10`, `pm25_24h_avg`, `hour`.
-- **Alert criteria**: test split only, AQI level Unhealthy or Hazardous.
-- **Both English and Urdu** alert text are kept for all alert records.
-- **Random Forest AQI classifier** is retained alongside the anomaly pipeline (doesn't conflict; adds value for dashboard).
-- **Prophet forecasting** runs as Part 3 of `model.py`: trained on all historical PM2.5 data, forecasts next 24 hours with confidence intervals. Model saved to `models/prophet_model.pkl`.
+- **Monorepo**: `apps/` + `packages/` + `agents/` in one repo — shared CI, easier to wire ML into API.
+- **FastAPI not Django**: same Python ecosystem as ML code, async, lighter.
+- **Clerk over Supabase Auth**: better DX, pre-built UI, easier phone/WhatsApp collection.
+- **Celery over Lambda**: Railway free tier, no cold starts, simpler Beat scheduling.
+- **Rule-based source classifier kept**: interpretable, no GPU, good for alert context.
+- **Per-city Prophet models**: city-specific seasonality (Lahore smog ≠ Karachi sea breeze).
+- **WhatsApp primary channel**: 93% Pakistan penetration; cheaper, richer templates than SMS.
 
 ## Season Map
 
@@ -115,16 +187,9 @@ Summer: months 6, 7, 8, 9
 Autumn: month 10
 ```
 
-## Key Dependencies
+## Environment Variables
 
-| Category | Libraries |
-|----------|-----------|
-| Data processing | pandas, numpy |
-| Machine learning | scikit-learn (RandomForest, IsolationForest), prophet |
-| Model persistence | joblib |
-| Visualisation | matplotlib, seaborn, plotly |
-| Geospatial | folium, streamlit-folium |
-| Dashboard | streamlit |
+See `.env.example` at repo root for all required variables (Supabase, Redis, Clerk, Resend, Twilio, Meta WhatsApp, WAQI, OpenAQ, Cloudflare R2).
 
 ## Code Style
 

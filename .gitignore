@@ -19,3 +19,22 @@ data/pakistan_aq_raw.csv
 # OS
 .DS_Store
 Thumbs.db
+
+# Next.js
+apps/web/.next/
+apps/web/node_modules/
+apps/web/.env.local
+
+# FastAPI
+apps/api/__pycache__/
+apps/api/.env
+
+# Root env
+.env
+
+# Trained model binaries — stored in Cloudflare R2, not git
+models/*.pkl
+outputs/
+
+# Claude Code memory
+.claude/

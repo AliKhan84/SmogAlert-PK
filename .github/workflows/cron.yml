@@ -1,0 +1,28 @@
+name: Scheduled Jobs
+
+on:
+  schedule:
+    # Scrape AQI data every hour (fallback when Railway Celery is down)
+    - cron: "10 * * * *"
+    # Daily retrain at 9 PM UTC = 2 AM PKT
+    - cron: "0 21 * * *"
+  workflow_dispatch: {}  # Allow manual trigger
+
+jobs:
+  scrape:
+    name: Scrape live AQI data
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install httpx sqlalchemy asyncpg python-dotenv pydantic-settings
+      - name: Run data scraper
+        run: python agents/data_scraper.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          WAQI_TOKEN: ${{ secrets.WAQI_TOKEN }}
+          OPENAQ_API_KEY: ${{ secrets.OPENAQ_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}

@@ -1,0 +1,122 @@
+"""Celery task: scrape live AQI data from OpenAQ, WAQI, and OpenMeteo."""
+
+import asyncio
+from datetime import datetime, timezone
+
+from workers.celery_app import celery_app
+
+PAKISTAN_CITIES = ["Islamabad", "Karachi", "Lahore", "Peshawar", "Quetta"]
+
+# WAQI city slugs
+WAQI_CITY_SLUGS = {
+    "Islamabad": "islamabad",
+    "Karachi": "karachi",
+    "Lahore": "lahore",
+    "Peshawar": "peshawar",
+    "Quetta": "quetta",
+}
+
+# OpenMeteo coordinates
+CITY_COORDS = {
+    "Islamabad": (33.6844, 73.0479),
+    "Karachi": (24.8607, 67.0011),
+    "Lahore": (31.5204, 74.3587),
+    "Peshawar": (34.0151, 71.5249),
+    "Quetta": (30.1798, 66.9750),
+}
+
+
+@celery_app.task(name="workers.scrape_task.scrape_all_cities", bind=True, max_retries=3)
+def scrape_all_cities(self):
+    """Main hourly scrape task — tries all sources and stores results."""
+    asyncio.run(_scrape_all_async())
+
+
+async def _scrape_all_async():
+    import httpx
+    from core.config import settings
+    from core.database import AsyncSessionLocal
+    from models.aqi import AqiReading
+    from sqlalchemy import select
+
+    readings = []
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        # --- WAQI (covers all 5 cities) ---
+        if settings.waqi_token:
+            for city, slug in WAQI_CITY_SLUGS.items():
+                try:
+                    resp = await client.get(
+                        f"https://api.waqi.info/feed/{slug}/",
+                        params={"token": settings.waqi_token},
+                    )
+                    data = resp.json()
+                    if data.get("status") == "ok":
+                        d = data["data"]
+                        iaqi = d.get("iaqi", {})
+                        readings.append({
+                            "city": city,
+                            "timestamp": datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0),
+                            "pm25": iaqi.get("pm25", {}).get("v"),
+                            "pm10": iaqi.get("pm10", {}).get("v"),
+                            "no2": iaqi.get("no2", {}).get("v"),
+                            "so2": iaqi.get("so2", {}).get("v"),
+                            "co": iaqi.get("co", {}).get("v"),
+                            "o3": iaqi.get("o3", {}).get("v"),
+                            "aqi_calculated": d.get("aqi"),
+                            "source": "waqi",
+                        })
+                except Exception as exc:
+                    print(f"[scrape] WAQI failed for {city}: {exc}")
+
+        # --- OpenMeteo Air Quality (fallback for missing cities) ---
+        covered = {r["city"] for r in readings}
+        for city in PAKISTAN_CITIES:
+            if city in covered:
+                continue
+            lat, lon = CITY_COORDS[city]
+            try:
+                resp = await client.get(
+                    "https://air-quality-api.open-meteo.com/v1/air-quality",
+                    params={
+                        "latitude": lat,
+                        "longitude": lon,
+                        "hourly": "pm2_5,pm10,nitrogen_dioxide,sulphur_dioxide,carbon_monoxide,ozone",
+                        "timezone": "Asia/Karachi",
+                        "past_hours": 1,
+                        "forecast_hours": 0,
+                    },
+                )
+                d = resp.json()
+                hourly = d.get("hourly", {})
+                if hourly.get("pm2_5"):
+                    readings.append({
+                        "city": city,
+                        "timestamp": datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0),
+                        "pm25": hourly["pm2_5"][-1] if hourly["pm2_5"] else None,
+                        "pm10": hourly["pm10"][-1] if hourly.get("pm10") else None,
+                        "no2": hourly["nitrogen_dioxide"][-1] if hourly.get("nitrogen_dioxide") else None,
+                        "so2": hourly["sulphur_dioxide"][-1] if hourly.get("sulphur_dioxide") else None,
+                        "co": hourly["carbon_monoxide"][-1] if hourly.get("carbon_monoxide") else None,
+                        "o3": hourly["ozone"][-1] if hourly.get("ozone") else None,
+                        "aqi_calculated": None,
+                        "source": "openmeteo",
+                    })
+            except Exception as exc:
+                print(f"[scrape] OpenMeteo failed for {city}: {exc}")
+
+    # Persist to DB (upsert by city + hour)
+    async with AsyncSessionLocal() as db:
+        for r in readings:
+            existing = await db.execute(
+                select(AqiReading).where(
+                    AqiReading.city == r["city"],
+                    AqiReading.timestamp == r["timestamp"],
+                )
+            )
+            if existing.scalar_one_or_none() is None:
+                row = AqiReading(**{k: v for k, v in r.items() if v is not None or k in ("city", "timestamp")})
+                db.add(row)
+        await db.commit()
+
+    print(f"[scrape] Stored {len(readings)} readings at {datetime.now(timezone.utc)}")
