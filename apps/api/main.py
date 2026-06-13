@@ -35,9 +35,14 @@ app.include_router(admin.router, prefix="/api")
 
 @app.on_event("startup")
 async def create_tables():
-    """Create all tables on startup if they don't exist (dev convenience)."""
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    """Create all tables on startup if they don't exist (dev convenience).
+    Non-fatal: if DB is unreachable at boot, log and continue — app still serves /health.
+    """
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+    except Exception as exc:
+        print(f"[startup] DB connection failed — tables not created: {exc}")
 
 
 @app.get("/health")
