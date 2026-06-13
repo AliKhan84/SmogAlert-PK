@@ -43,21 +43,23 @@ export default function DashboardPage() {
     const interval = setInterval(load, 5 * 60 * 1000);
 
     // Supabase Realtime — push updates when aqi_readings table changes
+    // supabase is null when env vars are missing (e.g. during SSR build)
     const channel = supabase
-      .channel("aqi_readings_changes")
-      .on(
-        "postgres_changes",
-        { event: "INSERT", schema: "public", table: "aqi_readings" },
-        () => {
-          // New row inserted by the scraper — refresh AQI cards
-          load();
-        }
-      )
-      .subscribe();
+      ? supabase
+          .channel("aqi_readings_changes")
+          .on(
+            "postgres_changes",
+            { event: "INSERT", schema: "public", table: "aqi_readings" },
+            () => {
+              load();
+            }
+          )
+          .subscribe()
+      : null;
 
     return () => {
       clearInterval(interval);
-      supabase.removeChannel(channel);
+      if (channel && supabase) supabase.removeChannel(channel);
     };
   }, []);
 
