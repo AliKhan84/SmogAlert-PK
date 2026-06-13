@@ -1,14 +1,16 @@
 """Celery task: daily model retraining — delegates to agents/retrain_agent.py."""
 
-import asyncio
 import subprocess
 import sys
 from pathlib import Path
 
 from workers.celery_app import celery_app
 
-# repo root is 3 levels up from apps/api/workers/
-REPO_ROOT = Path(__file__).resolve().parents[3]
+# In the monorepo the file lives at apps/api/workers/retrain_task.py (parents[3] = repo root).
+# In the Railway container only apps/api is copied to /app, so parents[3] doesn't exist;
+# fall back to /app so the module can at least import cleanly.
+_this = Path(__file__).resolve()
+REPO_ROOT = _this.parents[3] if len(_this.parents) > 3 else _this.parents[1]
 RETRAIN_AGENT = REPO_ROOT / "agents" / "retrain_agent.py"
 
 
