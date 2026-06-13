@@ -1,5 +1,7 @@
 """Celery application factory with scheduled tasks (Celery Beat)."""
 
+import ssl
+
 from celery import Celery
 from celery.schedules import crontab
 
@@ -16,12 +18,18 @@ celery_app = Celery(
     ],
 )
 
+# Upstash Redis uses rediss:// (TLS). Celery requires ssl_cert_reqs to be
+# set explicitly — CERT_NONE because Upstash uses managed certificates.
+_ssl_config = {"ssl_cert_reqs": ssl.CERT_NONE}
+_use_ssl = settings.redis_url.startswith("rediss://")
+
 celery_app.conf.update(
     task_serializer="json",
     result_serializer="json",
     accept_content=["json"],
     timezone="Asia/Karachi",
     enable_utc=True,
+    **({"broker_use_ssl": _ssl_config, "redis_backend_use_ssl": _ssl_config} if _use_ssl else {}),
     beat_schedule={
         # Scrape live AQI data every hour
         "scrape-aqi-hourly": {
