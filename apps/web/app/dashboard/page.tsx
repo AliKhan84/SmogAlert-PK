@@ -8,7 +8,7 @@ import { ForecastChart } from "@/components/dashboard/ForecastChart";
 import { PollutantPanel } from "@/components/dashboard/PollutantBar";
 import { getCurrentAqi, getCityForecast, getCityHistory } from "@/lib/api";
 import { aqiBadgeClass, PAKISTAN_CITIES } from "@/lib/aqi-utils";
-import { supabase } from "@/lib/supabase";
+import { useAqiWebSocket } from "@/lib/aqi-ws";
 import type { CurrentAqi, ForecastResponse, AqiReading } from "@/lib/api";
 
 // Map must load client-side only (Leaflet requires window)
@@ -42,26 +42,29 @@ export default function DashboardPage() {
     // Auto-refresh every 5 minutes as fallback
     const interval = setInterval(load, 5 * 60 * 1000);
 
-    // Supabase Realtime — push updates when aqi_readings table changes
-    // supabase is null when env vars are missing (e.g. during SSR build)
-    const channel = supabase
-      ? supabase
-          .channel("aqi_readings_changes")
-          .on(
-            "postgres_changes",
-            { event: "INSERT", schema: "public", table: "aqi_readings" },
-            () => {
-              load();
-            }
-          )
-          .subscribe()
-      : null;
-
     return () => {
       clearInterval(interval);
-      if (channel && supabase) supabase.removeChannel(channel);
     };
   }, []);
+
+  // Live updates from Railway WebSocket — merges aqi/category/pm25 without
+  // clobbering pm10/no2/source that only come from the REST endpoint.
+  useAqiWebSocket((wsData) => {
+    setAqiData((prev) =>
+      prev.map((existing) => {
+        const update = wsData.find((d) => d.city === existing.city);
+        if (!update) return existing;
+        return {
+          ...existing,
+          aqi: update.aqi,
+          category: update.category,
+          pm25: update.pm25,
+          updated_at: update.updated_at,
+        };
+      })
+    );
+    setLastUpdated(new Date());
+  });
 
   useEffect(() => {
     const loadCity = async () => {
