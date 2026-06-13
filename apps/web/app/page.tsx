@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { AqiGauge } from "@/components/dashboard/AqiGauge";
+import { NavAuth } from "@/components/NavAuth";
 import type { CurrentAqi } from "@/lib/api";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api";
@@ -27,20 +28,7 @@ export default async function LandingPage() {
           <span className="font-bold text-teal-700 dark:text-teal-400 text-lg">
             SmogAlert PK
           </span>
-          <div className="flex items-center gap-3">
-            <Link
-              href="/sign-in"
-              className="text-sm text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white"
-            >
-              Sign in
-            </Link>
-            <Link
-              href="/sign-up"
-              className="bg-teal-600 text-white text-sm px-4 py-1.5 rounded-lg hover:bg-teal-700 transition-colors"
-            >
-              Get alerts free
-            </Link>
-          </div>
+          <NavAuth />
         </div>
       </nav>
 

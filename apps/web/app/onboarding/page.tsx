@@ -22,15 +22,19 @@ export default function OnboardingPage() {
     setSubmitting(true);
     try {
       const token = await getToken();
-      if (!token) return;
-      await Promise.all([
-        addLocation(token, city, true),
-        updatePreferences(token, { aqi_threshold: threshold, channels: "email" }),
-      ]);
-      router.push("/dashboard");
+      if (token) {
+        // Best-effort: save preferences to API; failures are non-blocking
+        await Promise.allSettled([
+          addLocation(token, city, true),
+          updatePreferences(token, { aqi_threshold: threshold, channels: "email" }),
+        ]);
+      }
+    } catch {
+      // Ignore API errors — user can configure in Settings
     } finally {
       setSubmitting(false);
     }
+    router.push("/dashboard");
   };
 
   return (
