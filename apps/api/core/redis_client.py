@@ -19,18 +19,27 @@ def get_redis() -> aioredis.Redis:
 
 
 async def cache_get(key: str) -> Any | None:
-    """Return decoded JSON value or None if missing/expired."""
-    r = get_redis()
-    raw = await r.get(key)
-    return json.loads(raw) if raw else None
+    """Return decoded JSON value or None if missing/expired/unreachable."""
+    try:
+        r = get_redis()
+        raw = await r.get(key)
+        return json.loads(raw) if raw else None
+    except Exception:
+        return None
 
 
 async def cache_set(key: str, value: Any, ttl_seconds: int = 300) -> None:
-    """Store value serialised as JSON with TTL."""
-    r = get_redis()
-    await r.set(key, json.dumps(value), ex=ttl_seconds)
+    """Store value serialised as JSON with TTL. No-op if Redis is unreachable."""
+    try:
+        r = get_redis()
+        await r.set(key, json.dumps(value), ex=ttl_seconds)
+    except Exception:
+        pass
 
 
 async def cache_delete(key: str) -> None:
-    r = get_redis()
-    await r.delete(key)
+    try:
+        r = get_redis()
+        await r.delete(key)
+    except Exception:
+        pass
