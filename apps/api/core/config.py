@@ -3,8 +3,13 @@
 from pathlib import Path
 from pydantic_settings import BaseSettings
 
-# Repo root is 2 levels above this file (apps/api/core/config.py → repo root)
-_ROOT_ENV = Path(__file__).parents[3] / ".env"
+# In monorepo (apps/api/core/config.py → parents[3] = repo root).
+# In Railway (/app/core/config.py), parents[3] doesn't exist — use None
+# so pydantic-settings falls back to the injected environment variables.
+try:
+    _ROOT_ENV: str | None = str(Path(__file__).parents[3] / ".env")
+except IndexError:
+    _ROOT_ENV = None
 
 
 class Settings(BaseSettings):
