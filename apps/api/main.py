@@ -20,6 +20,8 @@ app.add_middleware(
         "http://localhost:3000",
         "https://smokalert.pk",
         "https://smokalert.vercel.app",
+        "https://web-chi-lac-66.vercel.app",
+        "https://web-dv2snmk8u-alikhan84s-projects.vercel.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],
