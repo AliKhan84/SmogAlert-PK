@@ -71,7 +71,7 @@ export default function DashboardPage() {
       try {
         const [fc, hist] = await Promise.all([
           getCityForecast(selectedCity),
-          getCityHistory(selectedCity, 7),
+          getCityHistory(selectedCity),  // default 168 readings (7×24h)
         ]);
         setForecast(fc);
         setHistory(hist);
@@ -154,8 +154,8 @@ export default function DashboardPage() {
           <ForecastChart points={forecast.points} city={selectedCity} />
         ) : (
           <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-6 shadow-sm text-center">
-            <p className="text-sm font-medium text-gray-500 dark:text-gray-400">24-hour forecast</p>
-            <p className="text-xs text-gray-400 dark:text-gray-600 mt-1">Loading AI forecast for {selectedCity}…</p>
+            <p className="text-sm font-medium text-gray-500 dark:text-gray-400">24-hour AI forecast — {selectedCity}</p>
+            <p className="text-xs text-gray-400 dark:text-gray-600 mt-1">Generating forecast…</p>
           </div>
         )}
 

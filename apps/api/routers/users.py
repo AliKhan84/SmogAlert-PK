@@ -25,12 +25,30 @@ async def _get_or_404(db: AsyncSession, clerk_user_id: str) -> User:
     return user
 
 
+async def _get_or_create(db: AsyncSession, clerk_user_id: str) -> User:
+    """Return user, creating a minimal record if the webhook hasn't fired yet."""
+    from models.user import AlertPreferences, Subscription
+    result = await db.execute(
+        select(User).where(User.clerk_user_id == clerk_user_id).options(selectinload(User.locations))
+    )
+    user = result.scalar_one_or_none()
+    if user is None:
+        user = User(clerk_user_id=clerk_user_id, email=f"{clerk_user_id}@clerk.user")
+        db.add(user)
+        await db.flush()
+        db.add(Subscription(user_id=user.id, plan="free"))
+        db.add(AlertPreferences(user_id=user.id))
+        await db.commit()
+        await db.refresh(user)
+    return user
+
+
 @router.get("/me", response_model=UserOut)
 async def get_me(
     user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
-    return await _get_or_404(db, user_id)
+    return await _get_or_create(db, user_id)
 
 
 @router.put("/me", response_model=UserOut)
