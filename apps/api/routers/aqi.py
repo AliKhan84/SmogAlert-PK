@@ -21,6 +21,22 @@ _ws_clients: set[WebSocket] = set()
 
 PAKISTAN_CITIES = ["Islamabad", "Karachi", "Lahore", "Peshawar", "Quetta"]
 
+
+def _aqi_to_category(aqi: float | None) -> str | None:
+    if aqi is None:
+        return None
+    if aqi <= 50:
+        return "Good"
+    elif aqi <= 100:
+        return "Moderate"
+    elif aqi <= 150:
+        return "Unhealthy for Sensitive Groups"
+    elif aqi <= 200:
+        return "Unhealthy"
+    elif aqi <= 300:
+        return "Very Unhealthy"
+    return "Hazardous"
+
 # City coordinates for the map
 CITY_COORDS = {
     "Islamabad": (33.6844, 73.0479),
@@ -52,7 +68,7 @@ async def get_current_aqi(db: AsyncSession = Depends(get_db)):
             results.append(CurrentAqiOut(
                 city=city,
                 aqi=reading.aqi_calculated,
-                category=reading.aqi_category,
+                category=reading.aqi_category or _aqi_to_category(reading.aqi_calculated),
                 pm25=reading.pm25,
                 pm10=reading.pm10,
                 no2=reading.no2,
