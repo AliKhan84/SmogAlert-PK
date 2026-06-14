@@ -150,7 +150,14 @@ export default function DashboardPage() {
         </div>
 
         {/* Forecast chart */}
-        {forecast && <ForecastChart points={forecast.points} city={selectedCity} />}
+        {forecast ? (
+          <ForecastChart points={forecast.points} city={selectedCity} />
+        ) : (
+          <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 p-6 shadow-sm text-center">
+            <p className="text-sm font-medium text-gray-500 dark:text-gray-400">24-hour forecast</p>
+            <p className="text-xs text-gray-400 dark:text-gray-600 mt-1">Loading AI forecast for {selectedCity}…</p>
+          </div>
+        )}
 
         {/* Anomaly summary */}
         {history.length > 0 && (
