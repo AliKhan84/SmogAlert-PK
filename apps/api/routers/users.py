@@ -87,7 +87,7 @@ async def update_preferences(
     user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
-    user = await _get_or_404(db, user_id)
+    user = await _get_or_create(db, user_id)
     result = await db.execute(select(AlertPreferences).where(AlertPreferences.user_id == user.id))
     prefs = result.scalar_one_or_none()
 
@@ -115,7 +115,7 @@ async def add_location(
     user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
-    user = await _get_or_404(db, user_id)
+    user = await _get_or_create(db, user_id)
     loc = UserLocation(
         user_id=user.id,
         city=body.city,

@@ -153,7 +153,7 @@ export default async function LandingPage() {
               <ul className="space-y-2 mb-6">
                 {features.map((f) => (
                   <li key={f} className="text-sm text-gray-600 dark:text-gray-400 flex items-center gap-2">
-                    <span className="text-teal-500">checkmark</span> {f}
+                    <span className="text-teal-500">✓</span> {f}
                   </li>
                 ))}
               </ul>
@@ -171,7 +171,7 @@ export default async function LandingPage() {
       {/* Footer */}
       <footer className="border-t border-gray-100 dark:border-gray-800 py-8">
         <div className="max-w-6xl mx-auto px-4 flex flex-col sm:flex-row justify-between items-center gap-4 text-sm text-gray-500">
-          <span>2026 SmogAlert PK</span>
+          <span>© 2026 SmogAlert PK</span>
           <div className="flex gap-6">
             <Link href="/dashboard" className="hover:text-gray-900 dark:hover:text-white">Dashboard</Link>
             <Link href="/settings" className="hover:text-gray-900 dark:hover:text-white">Settings</Link>
