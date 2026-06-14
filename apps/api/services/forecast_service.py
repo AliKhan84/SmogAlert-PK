@@ -52,12 +52,16 @@ async def generate_forecast(city: str, db: AsyncSession) -> list[Forecast]:
     model = load_model(city)
 
     # Build a 24-hour future DataFrame starting from the next full hour.
-    # Keep tz-aware versions for DB storage; Prophet requires tz-naive ds column
-    # (models were trained on naive timestamps from datetime.now() without UTC).
+    # Keep tz-aware versions for DB storage; Prophet requires tz-naive ds column.
+    # Cast to datetime64[ns] explicitly — pandas 2.x defaults to datetime64[us]
+    # which mismatches the ns dtype stored inside older Prophet pkl files and causes
+    # a TypeError during model.predict().
     now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
     future_timestamps_aware = [now + timedelta(hours=i) for i in range(1, 25)]
     future_df = pd.DataFrame({
-        "ds": [ts.replace(tzinfo=None) for ts in future_timestamps_aware]
+        "ds": pd.to_datetime(
+            [ts.replace(tzinfo=None) for ts in future_timestamps_aware]
+        ).astype("datetime64[ns]")
     })
 
     forecast_df = model.predict(future_df)

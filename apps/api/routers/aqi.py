@@ -105,14 +105,31 @@ async def get_current_aqi(db: AsyncSession = Depends(get_db)):
 async def get_city_history(
     city: str,
     days: int = 7,
+    limit: int | None = None,
     db: AsyncSession = Depends(get_db),
 ):
-    """Return hourly AQI readings for the last N days (default 7). Auth not required."""
+    """Return hourly AQI readings for a city.
+
+    - `limit`: return the most recent N readings regardless of date (for charts
+      showing historical Kaggle data when live scraper data is sparse).
+    - `days`: return readings from the last N calendar days (default 7, max 30).
+    """
     if city not in PAKISTAN_CITIES:
         raise HTTPException(status_code=404, detail=f"Unknown city: {city}")
+
+    if limit is not None:
+        limit = min(limit, 720)  # cap at 30 days × 24 h
+        result = await db.execute(
+            select(AqiReading)
+            .where(AqiReading.city == city)
+            .order_by(desc(AqiReading.timestamp))
+            .limit(limit)
+        )
+        rows = list(reversed(result.scalars().all()))
+        return rows
+
     if days > 30:
         days = 30
-
     since = datetime.now(timezone.utc) - timedelta(days=days)
     result = await db.execute(
         select(AqiReading)

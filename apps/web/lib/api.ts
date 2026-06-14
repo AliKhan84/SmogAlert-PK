@@ -96,8 +96,8 @@ async function apiFetch<T>(
 export const getCurrentAqi = () =>
   apiFetch<CurrentAqi[]>("/aqi/current", null);
 
-export const getCityHistory = (city: string, days = 7) =>
-  apiFetch<AqiReading[]>(`/aqi/${city}/history?days=${days}`, null);
+export const getCityHistory = (city: string, limit = 168) =>
+  apiFetch<AqiReading[]>(`/aqi/${city}/history?limit=${limit}`, null);
 
 export const getCityForecast = (city: string) =>
   apiFetch<ForecastResponse>(`/aqi/${city}/forecast`, null);
