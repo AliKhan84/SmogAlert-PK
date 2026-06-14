@@ -23,6 +23,25 @@ def _aqi_to_category(aqi: float | None) -> str | None:
     else:
         return "Hazardous"
 
+
+def _pm25_to_aqi(pm25: float | None) -> float | None:
+    """Convert PM2.5 µg/m³ to US EPA AQI using linear interpolation between breakpoints."""
+    if pm25 is None:
+        return None
+    # (pm25_low, pm25_high, aqi_low, aqi_high)
+    breakpoints = [
+        (0.0, 12.0, 0, 50),
+        (12.1, 35.4, 51, 100),
+        (35.5, 55.4, 101, 150),
+        (55.5, 150.4, 151, 200),
+        (150.5, 250.4, 201, 300),
+        (250.5, 500.4, 301, 500),
+    ]
+    for bp_lo, bp_hi, aqi_lo, aqi_hi in breakpoints:
+        if pm25 <= bp_hi:
+            return round(((aqi_hi - aqi_lo) / (bp_hi - bp_lo)) * (pm25 - bp_lo) + aqi_lo)
+    return 500.0
+
 PAKISTAN_CITIES = ["Islamabad", "Karachi", "Lahore", "Peshawar", "Quetta"]
 
 # WAQI city slugs

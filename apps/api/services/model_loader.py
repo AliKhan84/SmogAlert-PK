@@ -18,6 +18,21 @@ from typing import Any
 
 import joblib
 
+# Monkey-patch StringDtype to accept extra positional args from pickled models
+# trained with pandas versions that had a different __init__ signature.
+# This lets older .pkl files (which stored `StringDtype(storage, na_value)`)
+# unpickle correctly when the current pandas only accepts `StringDtype(storage)`.
+try:
+    import pandas as _pd
+    _orig_sd_init = _pd.core.arrays.string_.StringDtype.__init__
+
+    def _compat_sd_init(self, *args, **kwargs):
+        _orig_sd_init(self, args[0] if args else kwargs.get("storage"))
+
+    _pd.core.arrays.string_.StringDtype.__init__ = _compat_sd_init
+except Exception:
+    pass
+
 # Use /tmp so pkl files don't conflict with the apps/api/models/ Python package.
 # Falls back to MODELS_DIR_PATH env var if set (useful for local dev).
 MODELS_DIR = Path(os.getenv("MODELS_DIR_PATH", "/tmp/prophet_models"))
