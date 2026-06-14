@@ -1,12 +1,10 @@
 [phases.setup]
-nixPkgs = ["python312", "python312Packages.pyarrow", "gcc", "libffi", "zlib"]
+nixPkgs = ["python312", "gcc", "zlib", "libffi", "openssl"]
 
 [phases.install]
 cmds = [
-  # Create venv and install packages (pyarrow comes from Nix, not pip)
   "pip install --no-cache-dir -r requirements.txt",
-  # Make Nix-installed pyarrow accessible inside the venv by symlinking
-  "python -c \"import site; print(site.getsitepackages())\"",
+  "pip install --no-cache-dir 'pyarrow>=15.0'",
 ]
 
 [start]
