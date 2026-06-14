@@ -35,9 +35,13 @@ def scrape_all_cities(self):
 async def _scrape_all_async():
     import httpx
     from core.config import settings
-    from core.database import AsyncSessionLocal
+    from core.database import AsyncSessionLocal, engine
     from models.aqi import AqiReading
     from sqlalchemy import select
+
+    # Dispose the connection pool so asyncpg creates fresh connections for this
+    # event loop (Celery's asyncio.run() creates a new loop each task invocation).
+    await engine.dispose()
 
     readings = []
 

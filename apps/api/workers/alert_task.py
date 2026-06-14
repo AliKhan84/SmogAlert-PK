@@ -48,12 +48,17 @@ def run_alert_engine(self):
 
 
 async def _run_alert_engine_async():
-    from core.database import AsyncSessionLocal
+    from core.database import AsyncSessionLocal, engine
     from core.redis_client import cache_get, cache_set
     from models.aqi import Forecast
     from models.user import AlertPreferences, User, UserLocation
     from services.alert_dispatcher import dispatch_alert
     from sqlalchemy import select, and_
+
+    # asyncpg connections are bound to a specific event loop. Celery uses asyncio.run()
+    # per task which creates a NEW event loop each time. Disposing the pool forces
+    # SQLAlchemy to create fresh connections for the current event loop.
+    await engine.dispose()
 
     PAKISTAN_CITIES = ["Islamabad", "Karachi", "Lahore", "Peshawar", "Quetta"]
     now = datetime.now(timezone.utc)
