@@ -99,25 +99,27 @@ async def backfill():
         })
     print(f"  {len(records):,} records prepared")
 
+    # Remove any previously inserted kaggle rows so re-runs are idempotent
     async with AsyncSessionLocal() as db:
-        # Remove any previously inserted kaggle rows so re-runs are idempotent
         print("Clearing existing kaggle rows ...")
         await db.execute(delete(AqiReading).where(AqiReading.source == "kaggle"))
         await db.commit()
         print("  Done.")
 
-        # Bulk-insert in batches using asyncpg executemany
-        print(f"Inserting {len(records):,} rows in batches of {BATCH_SIZE:,} ...")
-        total_inserted = 0
-        num_batches = (len(records) + BATCH_SIZE - 1) // BATCH_SIZE
+    # Open a fresh session per batch — avoids Railway proxy idle-timeout killing
+    # a long-lived connection mid-transfer.
+    print(f"Inserting {len(records):,} rows in batches of {BATCH_SIZE:,} ...")
+    total_inserted = 0
+    num_batches = (len(records) + BATCH_SIZE - 1) // BATCH_SIZE
 
-        for batch_num, start in enumerate(range(0, len(records), BATCH_SIZE), 1):
-            batch = records[start : start + BATCH_SIZE]
+    for batch_num, start in enumerate(range(0, len(records), BATCH_SIZE), 1):
+        batch = records[start : start + BATCH_SIZE]
+        async with AsyncSessionLocal() as db:
             await db.execute(pg_insert(AqiReading), batch)
             await db.commit()
-            total_inserted += len(batch)
-            pct = total_inserted / len(records) * 100
-            print(f"  Batch {batch_num}/{num_batches} — {total_inserted:,}/{len(records):,} rows ({pct:.1f}%)")
+        total_inserted += len(batch)
+        pct = total_inserted / len(records) * 100
+        print(f"  Batch {batch_num}/{num_batches} — {total_inserted:,}/{len(records):,} rows ({pct:.1f}%)")
 
     print(f"\nDone. Inserted {total_inserted:,} rows into aqi_readings.")
 

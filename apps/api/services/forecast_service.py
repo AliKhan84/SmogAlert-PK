@@ -7,21 +7,13 @@ Model loading delegates to packages/ml/model_loader.py which handles:
 - Cloudflare R2 download if not found locally
 """
 
-import sys
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 import pandas as pd
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.aqi import Forecast
-
-# Add packages/ml to path so we can import model_loader
-_ML_PKG = Path(__file__).resolve().parents[3] / "packages" / "ml"
-if str(_ML_PKG) not in sys.path:
-    sys.path.insert(0, str(_ML_PKG))
-
-from model_loader import load_model  # noqa: E402
+from services.model_loader import load_model
 
 
 def _pm25_to_aqi_category(pm25: float) -> str:
