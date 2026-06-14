@@ -22,6 +22,20 @@ _ws_clients: set[WebSocket] = set()
 PAKISTAN_CITIES = ["Islamabad", "Karachi", "Lahore", "Peshawar", "Quetta"]
 
 
+def _pm25_to_aqi(pm25: float | None) -> float | None:
+    """Convert PM2.5 µg/m³ to US EPA AQI using linear interpolation."""
+    if pm25 is None:
+        return None
+    breakpoints = [
+        (0.0, 12.0, 0, 50), (12.1, 35.4, 51, 100), (35.5, 55.4, 101, 150),
+        (55.5, 150.4, 151, 200), (150.5, 250.4, 201, 300), (250.5, 500.4, 301, 500),
+    ]
+    for bp_lo, bp_hi, aqi_lo, aqi_hi in breakpoints:
+        if pm25 <= bp_hi:
+            return round(((aqi_hi - aqi_lo) / (bp_hi - bp_lo)) * (pm25 - bp_lo) + aqi_lo)
+    return 500.0
+
+
 def _aqi_to_category(aqi: float | None) -> str | None:
     if aqi is None:
         return None
@@ -65,10 +79,11 @@ async def get_current_aqi(db: AsyncSession = Depends(get_db)):
         )
         reading = row.scalar_one_or_none()
         if reading:
+            aqi = reading.aqi_calculated or _pm25_to_aqi(reading.pm25)
             results.append(CurrentAqiOut(
                 city=city,
-                aqi=reading.aqi_calculated,
-                category=reading.aqi_category or _aqi_to_category(reading.aqi_calculated),
+                aqi=aqi,
+                category=reading.aqi_category or _aqi_to_category(aqi),
                 pm25=reading.pm25,
                 pm10=reading.pm10,
                 no2=reading.no2,
