@@ -142,8 +142,8 @@ async def _scrape_all_async():
                         "so2": hourly["sulphur_dioxide"][-1] if hourly.get("sulphur_dioxide") else None,
                         "co": hourly["carbon_monoxide"][-1] if hourly.get("carbon_monoxide") else None,
                         "o3": hourly["ozone"][-1] if hourly.get("ozone") else None,
-                        "aqi_calculated": None,
-                        "aqi_category": None,
+                        "aqi_calculated": _pm25_to_aqi(hourly["pm2_5"][-1] if hourly["pm2_5"] else None),
+                        "aqi_category": _aqi_to_category(_pm25_to_aqi(hourly["pm2_5"][-1] if hourly["pm2_5"] else None)),
                         "source": "openmeteo",
                     })
             except Exception as exc:
