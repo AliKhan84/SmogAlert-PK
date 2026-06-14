@@ -14,7 +14,7 @@ city's historical hour-of-day PM2.5 patterns stored in the aqi_readings table.
 from datetime import datetime, timedelta, timezone
 
 import pandas as pd
-from sqlalchemy import desc, select
+from sqlalchemy import desc, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.aqi import AqiReading, Forecast
@@ -41,18 +41,36 @@ async def _statistical_forecast(city: str, db: AsyncSession) -> list[Forecast]:
     Fallback 24-hour forecast using hour-of-day PM2.5 averages from the DB.
 
     Steps:
-    1. Pull the most recent 720 hourly readings (≈ 30 days) for the city.
-    2. Group by hour-of-day and compute mean PM2.5 (seasonal day-cycle pattern).
+    1. Pull readings from the same calendar month to capture seasonal patterns.
+       Fall back to recent 720 readings if no same-month data exists.
+    2. Group by hour-of-day and compute mean PM2.5 (diurnal cycle pattern).
     3. For any missing hours, use the city-wide average.
     4. Persist 24 Forecast rows starting from the next full UTC hour.
     """
+    now = datetime.now(timezone.utc)
+    current_month = now.month
+
+    # Prefer same-month historical data to capture seasonal patterns (e.g. June
+    # is mild in Lahore, not winter smog season, so we filter by month=6).
     result = await db.execute(
-        select(AqiReading)
-        .where(AqiReading.city == city, AqiReading.pm25.is_not(None))
-        .order_by(desc(AqiReading.timestamp))
-        .limit(720)
+        select(AqiReading).where(
+            AqiReading.city == city,
+            AqiReading.pm25.is_not(None),
+            # Filter by the same calendar month using SQL EXTRACT
+            text("EXTRACT(MONTH FROM timestamp AT TIME ZONE 'UTC') = :m").bindparams(m=current_month),
+        )
     )
     readings = result.scalars().all()
+
+    if not readings:
+        # Fall back to most recent readings if no same-month data
+        result = await db.execute(
+            select(AqiReading)
+            .where(AqiReading.city == city, AqiReading.pm25.is_not(None))
+            .order_by(desc(AqiReading.timestamp))
+            .limit(720)
+        )
+        readings = result.scalars().all()
 
     if not readings:
         return []
