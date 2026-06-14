@@ -114,10 +114,13 @@ async def get_city_forecast(city: str, db: AsyncSession = Depends(get_db)):
     if not rows:
         # Trigger an on-demand forecast generation
         from services.forecast_service import generate_forecast
-        rows = await generate_forecast(city, db)
+        try:
+            rows = await generate_forecast(city, db)
+        except FileNotFoundError:
+            rows = []
 
     if not rows:
-        raise HTTPException(status_code=503, detail="Forecast not available yet")
+        raise HTTPException(status_code=503, detail="Forecast not available yet — upload Prophet models to R2 to enable")
 
     points = [
         ForecastPoint(
