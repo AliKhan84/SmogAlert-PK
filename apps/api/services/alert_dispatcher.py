@@ -6,10 +6,9 @@ key is not configured, so the system degrades gracefully during local dev.
 
 import httpx
 import resend
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import settings
-from models.user import AlertPreferences, AlertSent, User
+from models.user import AlertSent, User
 
 
 AQI_HEALTH_ADVICE = {
@@ -161,26 +160,27 @@ async def dispatch_alert(
     aqi_value: float | None,
     message_en: str,
     message_ur: str,
-    db: AsyncSession,
+    channels: str = "email",
 ) -> None:
     """
     Send an alert to the user via all their configured channels and log each
     attempt to the alerts_sent table.
-    """
-    from sqlalchemy import select
-    result = await db.execute(select(AlertPreferences).where(AlertPreferences.user_id == user.id))
-    prefs = result.scalar_one_or_none()
-    channels = (prefs.channels if prefs else "email").split(",")
 
-    for channel in channels:
-        channel = channel.strip()
+    Uses its own DB session so the caller's session is never contaminated by
+    a mid-dispatch commit.
+    """
+    from core.database import AsyncSessionLocal
+
+    channel_list = [c.strip() for c in channels.split(",")]
+
+    rows: list[AlertSent] = []
+    for channel in channel_list:
         status = "pending"
         try:
             if channel == "email":
                 status = await _send_email(user.email, city, aqi_level, aqi_value, message_en)
 
             elif channel == "sms":
-                # Use Urdu message for SMS — more concise, preferred by PK users
                 status = await _send_sms(user.phone_whatsapp or "", message_ur)
 
             elif channel == "whatsapp":
@@ -195,7 +195,7 @@ async def dispatch_alert(
             print(f"[alert_dispatcher] {channel} send failed for user {user.id}: {exc}")
             status = "failed"
 
-        db.add(AlertSent(
+        rows.append(AlertSent(
             user_id=user.id,
             city=city,
             aqi_level=aqi_level,
@@ -206,4 +206,6 @@ async def dispatch_alert(
             status=status,
         ))
 
-    await db.commit()
+    async with AsyncSessionLocal() as db:
+        db.add_all(rows)
+        await db.commit()

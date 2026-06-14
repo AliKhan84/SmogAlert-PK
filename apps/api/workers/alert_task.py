@@ -51,16 +51,18 @@ async def _run_alert_engine_async():
     from core.database import AsyncSessionLocal
     from core.redis_client import cache_get, cache_set
     from models.aqi import Forecast
-    from models.user import AlertPreferences, Subscription, User, UserLocation
+    from models.user import AlertPreferences, User, UserLocation
     from services.alert_dispatcher import dispatch_alert
     from sqlalchemy import select, and_
 
     PAKISTAN_CITIES = ["Islamabad", "Karachi", "Lahore", "Peshawar", "Quetta"]
     now = datetime.now(timezone.utc)
 
-    async with AsyncSessionLocal() as db:
-        for city in PAKISTAN_CITIES:
-            # Pull the next 24h forecast
+    # Use a fresh session per city — avoids asyncpg "another operation in progress"
+    # errors that occur when db.commit() inside dispatch_alert leaves the shared
+    # session in an unclean state for the next city's queries.
+    for city in PAKISTAN_CITIES:
+        async with AsyncSessionLocal() as db:
             since = now - timedelta(minutes=30)
             until = now + timedelta(hours=24)
             result = await db.execute(
@@ -70,9 +72,9 @@ async def _run_alert_engine_async():
             )
             forecast_rows = result.scalars().all()
             if not forecast_rows:
+                print(f"[alert_engine] No forecast data for {city} — skipping")
                 continue
 
-            # Find users subscribed to this city
             user_result = await db.execute(
                 select(User)
                 .join(UserLocation, UserLocation.user_id == User.id)
@@ -81,20 +83,18 @@ async def _run_alert_engine_async():
             users = user_result.scalars().unique().all()
 
             for user in users:
-                # Get user threshold
                 prefs_result = await db.execute(
                     select(AlertPreferences).where(AlertPreferences.user_id == user.id)
                 )
                 prefs = prefs_result.scalar_one_or_none()
                 threshold = prefs.aqi_threshold if prefs else "Unhealthy"
+                channels = prefs.channels if prefs else "email"
 
-                # Check Redis dedup key (6-hour cooldown)
                 dedup_key = f"alert_sent:{user.id}:{city}"
                 already_alerted = await cache_get(dedup_key)
                 if already_alerted:
                     continue
 
-                # Find the first forecast hour that exceeds threshold
                 triggering_point = None
                 for point in forecast_rows:
                     if point.aqi_category and _threshold_met(point.aqi_category, threshold):
@@ -109,6 +109,7 @@ async def _run_alert_engine_async():
                     city, triggering_point.aqi_category, hours_ahead, triggering_point.pm25_predicted
                 )
 
+                # dispatch_alert gets its own session internally — do not pass db
                 await dispatch_alert(
                     user=user,
                     city=city,
@@ -116,9 +117,8 @@ async def _run_alert_engine_async():
                     aqi_value=triggering_point.pm25_predicted,
                     message_en=msg_en,
                     message_ur=msg_ur,
-                    db=db,
+                    channels=channels,
                 )
 
-                # Set dedup key — 6 hours TTL
                 await cache_set(dedup_key, True, ttl_seconds=6 * 3600)
                 print(f"[alert_engine] Alert sent to user {user.id} for {city} ({triggering_point.aqi_category})")
