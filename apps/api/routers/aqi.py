@@ -116,7 +116,8 @@ async def get_city_forecast(city: str, db: AsyncSession = Depends(get_db)):
         from services.forecast_service import generate_forecast
         try:
             rows = await generate_forecast(city, db)
-        except FileNotFoundError:
+        except Exception as exc:
+            print(f"[forecast] generate_forecast failed for {city}: {exc}")
             rows = []
 
     if not rows:

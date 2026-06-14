@@ -51,22 +51,26 @@ async def generate_forecast(city: str, db: AsyncSession) -> list[Forecast]:
     """
     model = load_model(city)
 
-    # Build a 24-hour future DataFrame starting from the next full hour
+    # Build a 24-hour future DataFrame starting from the next full hour.
+    # Keep tz-aware versions for DB storage; Prophet requires tz-naive ds column
+    # (models were trained on naive timestamps from datetime.now() without UTC).
     now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
-    future_timestamps = [now + timedelta(hours=i) for i in range(1, 25)]
-    future_df = pd.DataFrame({"ds": future_timestamps})
+    future_timestamps_aware = [now + timedelta(hours=i) for i in range(1, 25)]
+    future_df = pd.DataFrame({
+        "ds": [ts.replace(tzinfo=None) for ts in future_timestamps_aware]
+    })
 
     forecast_df = model.predict(future_df)
 
     rows: list[Forecast] = []
-    for _, row in forecast_df.iterrows():
+    for i, (_, row) in enumerate(forecast_df.iterrows()):
         pm25 = max(0.0, float(row["yhat"]))
         lower = max(0.0, float(row["yhat_lower"]))
         upper = max(0.0, float(row["yhat_upper"]))
 
         fc_row = Forecast(
             city=city,
-            forecast_for=row["ds"].to_pydatetime().replace(tzinfo=timezone.utc),
+            forecast_for=future_timestamps_aware[i],
             pm25_predicted=pm25,
             lower_ci=lower,
             upper_ci=upper,
