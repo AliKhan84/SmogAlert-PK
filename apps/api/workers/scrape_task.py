@@ -105,18 +105,24 @@ async def _scrape_all_async():
             except Exception as exc:
                 print(f"[scrape] OpenMeteo failed for {city}: {exc}")
 
-    # Persist to DB (upsert by city + hour)
+    # Persist to DB (upsert by city + hour).
+    # Two-pass approach: all SELECTs first, then all INSERTs.
+    # Mixing db.add() and await db.execute() in the same loop triggers SQLAlchemy
+    # autoflush mid-loop, which causes asyncpg "another operation in progress" errors.
     async with AsyncSessionLocal() as db:
+        to_insert = []
         for r in readings:
-            existing = await db.execute(
-                select(AqiReading).where(
+            result = await db.execute(
+                select(AqiReading.id).where(
                     AqiReading.city == r["city"],
                     AqiReading.timestamp == r["timestamp"],
                 )
             )
-            if existing.scalar_one_or_none() is None:
-                row = AqiReading(**{k: v for k, v in r.items() if v is not None or k in ("city", "timestamp")})
-                db.add(row)
+            if result.scalar_one_or_none() is None:
+                to_insert.append(r)
+
+        for r in to_insert:
+            db.add(AqiReading(**{k: v for k, v in r.items() if v is not None or k in ("city", "timestamp")}))
         await db.commit()
 
     print(f"[scrape] Stored {len(readings)} readings at {datetime.now(timezone.utc)}")
