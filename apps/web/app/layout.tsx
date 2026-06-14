@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { ClerkProvider } from "@clerk/nextjs";
 import localFont from "next/font/local";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import "./globals.css";
 
 const geistSans = localFont({
@@ -30,8 +31,19 @@ export default function RootLayout({
 }) {
   return (
     <ClerkProvider>
-      <html lang="en">
+      <html lang="en" suppressHydrationWarning>
+        <head>
+          {/* Prevent flash of light mode on page load */}
+          <script
+            dangerouslySetInnerHTML={{
+              __html: `(function(){var t=localStorage.getItem('theme'),d=window.matchMedia('(prefers-color-scheme: dark)').matches;if(t==='dark'||(t!=='light'&&d))document.documentElement.classList.add('dark')})()`,
+            }}
+          />
+        </head>
         <body className={`${geistSans.variable} antialiased bg-white dark:bg-gray-950`}>
+          <div className="fixed top-4 right-4 z-50">
+            <ThemeToggle />
+          </div>
           {children}
         </body>
       </html>
