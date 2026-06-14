@@ -134,8 +134,6 @@ streamlit run dashboard/app.py
 
 ## Team
 
-Built for the **SmogNet Datathon — UET Mardan**
-
 - **Ali Khan**
 - **M Sudais**
 - **Younas Khan**
