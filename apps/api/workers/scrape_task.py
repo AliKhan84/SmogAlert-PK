@@ -5,6 +5,24 @@ from datetime import datetime, timezone
 
 from workers.celery_app import celery_app
 
+
+def _aqi_to_category(aqi: float | None) -> str | None:
+    """Convert a US EPA AQI integer value to a category label."""
+    if aqi is None:
+        return None
+    if aqi <= 50:
+        return "Good"
+    elif aqi <= 100:
+        return "Moderate"
+    elif aqi <= 150:
+        return "Unhealthy for Sensitive Groups"
+    elif aqi <= 200:
+        return "Unhealthy"
+    elif aqi <= 300:
+        return "Very Unhealthy"
+    else:
+        return "Hazardous"
+
 PAKISTAN_CITIES = ["Islamabad", "Karachi", "Lahore", "Peshawar", "Quetta"]
 
 # WAQI city slugs
@@ -58,6 +76,7 @@ async def _scrape_all_async():
                     if data.get("status") == "ok":
                         d = data["data"]
                         iaqi = d.get("iaqi", {})
+                        aqi_val = d.get("aqi")
                         readings.append({
                             "city": city,
                             "timestamp": datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0),
@@ -67,7 +86,8 @@ async def _scrape_all_async():
                             "so2": iaqi.get("so2", {}).get("v"),
                             "co": iaqi.get("co", {}).get("v"),
                             "o3": iaqi.get("o3", {}).get("v"),
-                            "aqi_calculated": d.get("aqi"),
+                            "aqi_calculated": aqi_val,
+                            "aqi_category": _aqi_to_category(aqi_val),
                             "source": "waqi",
                         })
                 except Exception as exc:
@@ -104,6 +124,7 @@ async def _scrape_all_async():
                         "co": hourly["carbon_monoxide"][-1] if hourly.get("carbon_monoxide") else None,
                         "o3": hourly["ozone"][-1] if hourly.get("ozone") else None,
                         "aqi_calculated": None,
+                        "aqi_category": None,
                         "source": "openmeteo",
                     })
             except Exception as exc:
