@@ -18,7 +18,7 @@ pandas==2.2.3
 numpy==2.1.2
 scikit-learn==1.5.2
 prophet==1.1.6
-pyarrow==17.0.0
+# pyarrow installed via nixpkgs (see nixpacks.toml) — pip wheel fails on Railway/Nix
 joblib==1.4.2
 requests==2.32.3
 pytest==8.3.3

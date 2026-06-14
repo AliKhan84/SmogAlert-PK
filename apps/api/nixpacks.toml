@@ -1,12 +1,13 @@
 [phases.setup]
-# Install pyarrow via Nix so it's available system-wide before pip runs.
-# pip-installed pyarrow sometimes fails to build wheels on Railway's Nix environment.
 nixPkgs = ["python312", "python312Packages.pyarrow", "gcc", "libffi", "zlib"]
 
 [phases.install]
-# Install all requirements. pyarrow is already in the Nix environment so pip
-# will find it via the linked site-packages and skip re-installation.
-cmds = ["pip install --no-cache-dir -r requirements.txt"]
+cmds = [
+  # Create venv and install packages (pyarrow comes from Nix, not pip)
+  "pip install --no-cache-dir -r requirements.txt",
+  # Make Nix-installed pyarrow accessible inside the venv by symlinking
+  "python -c \"import site; print(site.getsitepackages())\"",
+]
 
 [start]
 cmd = "uvicorn main:app --host 0.0.0.0 --port $PORT"
